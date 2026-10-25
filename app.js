@@ -287,9 +287,12 @@ function sayHello() {
 // Coming back, the retained state arrives the moment a broker connects.
 function onVisibility() {
   if (document.visibilityState === 'visible') {
-    // A new visit: the phone has to answer again before anything shows as live.
+    // A new visit: the phone has to answer again before anything shows as live, so it is always asked,
+    // however soon after the last hello (Director recheck 2026-10-25: shown again within 15 s, it waited
+    // three minutes on "Checking your phone…").
     heardLive = 0;
     pendingSince = 0;
+    lastHello = 0;
     openLink();
     sayHello();
     startTick();
@@ -502,9 +505,17 @@ function stateLine() {
 function renderStateLine() {
   const warn = warningShown();
   $('stateText').textContent = stateLine();
-  $('stateText').parentElement.classList.toggle('warn', warn);
+  // The line is in the warning style only when it is itself a warning; "Tidal didn't start" is said in
+  // the headline, beside a plain "Phone connected".
+  $('stateText').parentElement.classList.toggle('warn', lineWarns());
   $('dot').classList.toggle('live', !!(hasTrack() && state.play && !state.buf && heardLive && !warn));
-  document.body.classList.toggle('stale', !!state && warn);
+  // Dimmed only when an old song is on screen; a headline saying what went wrong stays bright.
+  document.body.classList.toggle('stale', !!state && warn && hasTrack());
+}
+
+function lineWarns() {
+  return !!((linkDownSince && Date.now() - linkDownSince > 5000) || phoneSilent() || startPhase() === 'silent'
+    || (typeof mqtt === 'undefined' && mqttTries >= 10 && !window.__testLink));
 }
 
 // Headline and line under it when no song is showing: what is going on, and what to do.
@@ -740,6 +751,9 @@ function press(c, extra) {
     renderNow();
   }
   send(c, extra);
+  // Starting Tidal: the phone answers every hello, so an answer after this press tells "Tidal didn't
+  // start" (the phone is fine) apart from "your phone is not answering", even when Tidal reports nothing.
+  if (c === 'play' && startingSince) send('hello');
   // Play and pause are safe to repeat: if Tidal has not changed after a moment (the phone was
   // reconnecting, a message was lost), send it once more instead of leaving the press unanswered.
   if (c === 'play' || c === 'pause') {
@@ -1350,6 +1364,8 @@ function renderSoundStatus() {
     warn = !!(sndAsked && Date.now() - sndAsked > 7000);
     text = warn ? 'Your phone is not answering' : 'Asking your phone…';
   } else if (phoneSilent()) { text = 'Your phone is not answering'; warn = true; }
+  // A broker's stored copy shows the last sound, but only the phone's own answer this visit is live.
+  else if (!heardLive) text = 'Checking your phone…';
   else if (!snd.s.on) text = 'Off · Tidal plays as normal';
   else { text = snd.status || ''; live = !!snd.active; }
   sndWarn = warn;

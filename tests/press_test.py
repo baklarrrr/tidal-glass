@@ -161,8 +161,9 @@ with sync_playwright() as p:
     c = commands()
     # Since the 2026-10-25 review the headline says it (the top line stays about the link).
     starting = page.evaluate("[$('title').textContent, $('artist').textContent, stateLine()]")
-    check("closed Tidal: says so, Play sends one play, the headline says 'Starting Tidal…'",
-          closed_title[0] == "Tidal is closed" and "Press Play" in closed_title[1] and c == ["play"]
+    # Play also says hello, so the phone's answer tells Tidal failing apart from a silent phone.
+    check("closed Tidal: says so, Play sends one play and a hello, the headline says 'Starting Tidal…'",
+          closed_title[0] == "Tidal is closed" and "Press Play" in closed_title[1] and c == ["play", "hello"]
           and starting[0] == "Starting Tidal…" and starting[2] == "Phone connected", json.dumps([closed_title, c, starting]))
     page.evaluate("async s => { await handle(await seal({...s, at: Date.now() + 1000, play: true})); }", STATE)
     after = page.evaluate("[stateLine(), startingSince]")
@@ -193,6 +194,8 @@ with sync_playwright() as p:
     CLOSED = "s => { state = {t: 'state', acc: true, ses: false, play: false, buf: false, pos: 0, at: Date.now(), vol: s.vol, q: [], qa: -1}; "
     page.evaluate(CLOSED + "startingSince = Date.now() - 20000; heardLive = Date.now() - 13000; pendingSince = 0; renderNow(); }", STATE)
     failed = page.evaluate("[$('title').textContent, $('artist').textContent, stateLine()]")
+    # The failure is said in the headline, which stays bright; the plain top line is not a warning.
+    failed_look = page.evaluate("[document.body.classList.contains('stale'), document.querySelector('.topline .state').classList.contains('warn')]")
     page.evaluate("startingSince = Date.now() - 41000; heardLive = Date.now() - 34000; renderNow();")
     after40 = page.evaluate("[$('title').textContent, stateLine()]")
     page.evaluate(CLOSED + "startingSince = Date.now() - 20000; heardLive = Date.now() - 60000; pendingSince = Date.now() - 20000; renderNow(); }", STATE)
@@ -205,7 +208,7 @@ with sync_playwright() as p:
           failed[0] == "Tidal didn't start" and "then press Play" in failed[1] and failed[2] == "Phone connected"
           and after40 == ["Tidal didn't start", "Phone connected"]
           and silent == ["Your phone is not answering", "Your phone is not answering", True]
-          and cleared == ["Tidal is closed", 0], json.dumps([failed, after40, silent, cleared]))
+          and cleared == ["Tidal is closed", 0] and failed_look == [False, False], json.dumps([failed, after40, silent, cleared, failed_look]))
 
     # 27. A broker's stored copy is not the phone answering (Director recheck 2026-10-25): on a fresh
     # visit it shows, but not as live; without a live answer the warning comes, in the warning style, the
@@ -229,6 +232,17 @@ with sync_playwright() as p:
     page.evaluate("pendingSince = 0; checkCalm();")
     check("calm stays off while a warning shows", calm_on_warning is False, json.dumps(calm_on_warning))
     page.evaluate("wakeUp()")
+
+    # 31. Shown again soon after the last hello, the page asks the phone at once instead of waiting
+    # three minutes on "Checking your phone…" (Director recheck 2, 2026-10-25).
+    reset()
+    page.evaluate("lastHello = Date.now(); Object.defineProperty(document, 'visibilityState', {configurable: true, get: () => 'hidden'}); document.dispatchEvent(new Event('visibilitychange'));")
+    page.wait_for_timeout(500)
+    page.evaluate("window.__sent.length = 0; Object.defineProperty(document, 'visibilityState', {configurable: true, get: () => 'visible'}); document.dispatchEvent(new Event('visibilitychange'));")
+    page.wait_for_timeout(500)
+    quick = commands()
+    check("shown again within 15 s: a hello goes out at once", "hello" in quick, json.dumps(quick))
+    page.evaluate("async s => { await handle(await seal({...s, at: Date.now() + 40000})); }", STATE)
 
     # 14. Hidden: a press waits; the link is not reopened behind the wearer's back (R4).
     reset()
@@ -516,6 +530,19 @@ with sync_playwright() as p:
         sp.evaluate("pendingSince = 0; renderSoundStatus();")
         check(NAME28, asks == 1 and st == ["Your phone is not answering", True, False], json.dumps([asks, st]))
     guard(NAME28, t28)
+
+    # 33. Sound Lab on a fresh visit: a broker's stored copy shows the sound but not as live, until the
+    # phone answers (Director recheck 2, 2026-10-25).
+    NAME33 = "Sound Lab: a stored copy on a fresh visit reads 'Checking your phone…', not live"
+
+    def t33():
+        sp.evaluate("heardLive = 0; pendingSince = 0; sndPending = null; sndNote = null;")
+        sp.evaluate("async m => { await handle(await seal({...m, at: 20}), true); renderSoundStatus(); }", SND)
+        st = sp.evaluate("[$('sndStateText').textContent, $('sndDot').classList.contains('live')]")
+        sp.evaluate("async m => { await handle(await seal({...m, at: 21})); renderSoundStatus(); }", SND)
+        live = sp.evaluate("[$('sndStateText').textContent, $('sndDot').classList.contains('live')]")
+        check(NAME33, st == ["Checking your phone…", False] and live == ["Shaping Tidal", True], json.dumps([st, live]))
+    guard(NAME33, t33)
 
     # 29. Sound Lab: an Off the phone never confirms goes back to what the phone last reported, so the
     # header and switch never claim it later (Director recheck 2026-10-25, S05r).
