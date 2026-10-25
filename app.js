@@ -118,13 +118,15 @@ function linkChanged() {
 // of this app can give up on it before it arrives, so it is fetched again for about half a minute
 // instead of the page waiting silently.
 let mqttTries = 0;
+let mqttLoading = false;
 function loadMqtt() {
-  if (typeof mqtt !== 'undefined' || mqttTries >= 10) return;
+  if (typeof mqtt !== 'undefined' || mqttLoading || mqttTries >= 10) return;
   mqttTries++;
+  mqttLoading = true;
   const s = document.createElement('script');
   s.src = 'vendor/mqtt.min.js';
-  s.onload = () => { if (document.visibilityState === 'visible') openLink(); };
-  s.onerror = () => setTimeout(loadMqtt, 3000);
+  s.onload = () => { mqttLoading = false; if (document.visibilityState === 'visible') openLink(); };
+  s.onerror = () => { mqttLoading = false; setTimeout(loadMqtt, 3000); };
   document.head.appendChild(s);
 }
 
