@@ -1,12 +1,13 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- Sound Lab: the cyan of its screens, on an indigo tile so it stays apart from Tidal Glass's teal one. -->
   <defs>
     <radialGradient id="bg" cx="35%" cy="30%" r="80%">
-      <stop offset="0" stop-color="#7a4a10"/>
-      <stop offset="1" stop-color="#1a0f03"/>
+      <stop offset="0" stop-color="#2a3a94"/>
+      <stop offset="1" stop-color="#070a1f"/>
     </radialGradient>
   </defs>
   <rect width="64" height="64" rx="15" fill="url(#bg)"/>
-  <g fill="#ffb547" transform="translate(4 3.8) scale(.88)">
+  <g fill="#2fd8ec" transform="translate(4 3.8) scale(.88)">
     <rect x="14.2" y="10" width="3.6" height="44" rx="1.8" opacity=".5"/>
     <rect x="30.2" y="10" width="3.6" height="44" rx="1.8" opacity=".5"/>
     <rect x="46.2" y="10" width="3.6" height="44" rx="1.8" opacity=".5"/>
