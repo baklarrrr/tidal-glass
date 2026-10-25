@@ -126,6 +126,56 @@ function linkUp() {
   return links.some((l) => l.connected);
 }
 
+// ---- link report ---------------------------------------------------------------------------
+// What the glasses' own link did on each visit, so the opening lag on the real glasses can be read
+// (Bakar 2026-10-25: there a press waited 20-60 s for a broker; on a PC 2 s). Sent sealed once per
+// visit, on its first broker connect, with the previous visit's whole record (kept here when the page
+// is hidden, so a visit that never reached the phone still gets reported). The phone ignores it.
+const BUILD = 15;
+let visit = null;
+let hiddenAt = 0;
+
+function startVisit(kind) {
+  const now = Date.now();
+  visit = {
+    k: kind, // 'load' or 'wake'
+    hid: kind === 'wake' && hiddenAt ? now - hiddenAt : 0,
+    kept: linkUp(),
+    on: navigator.onLine,
+    mq: typeof mqtt !== 'undefined',
+    age: Math.round(performance.now()),
+    b: {}, // per broker: n reconnect attempts, up ms to the first connect, e the last error
+    at: now, sent: false,
+  };
+}
+
+function visitRecord(v) {
+  const { at, sent, ...r } = v;
+  return r;
+}
+
+function noteLink(host, what, err) {
+  if (!visit) return;
+  const b = visit.b[host] || (visit.b[host] = { n: 0 });
+  if (what === 'try') b.n++;
+  else if (what === 'err') b.e = String((err && (err.message || err.code)) || err).slice(0, 40);
+  else if (what === 'up' && b.up == null) {
+    b.up = Date.now() - visit.at;
+    if (!visit.sent) {
+      visit.sent = true;
+      let prev = null;
+      try { prev = JSON.parse(localStorage.getItem('tg.visit') || 'null'); localStorage.removeItem('tg.visit'); } catch (e) { /* none kept */ }
+      send('diag', { v: BUILD, cur: visitRecord(visit), prev });
+    }
+  }
+}
+
+function endVisit() {
+  if (!visit) return;
+  try { localStorage.setItem('tg.visit', JSON.stringify(visitRecord(visit))); } catch (e) { /* storage may be off */ }
+  visit = null;
+}
+
 function linkChanged() {
   if (linkUp()) linkDownSince = 0;
   else if (!linkDownSince) linkDownSince = Date.now();
@@ -167,7 +217,10 @@ function addBroker({ url, ...extra }) {
     clientId: `tgg-${linkId}-${links.length}`, clean: true, keepalive: 45, protocolVersion: 4,
     reconnectPeriod: 1500, connectTimeout: 8000, ...extra,
   });
+  const host = new URL(url).hostname.split('.').slice(-2, -1)[0]; // emqx, hivemq, shiftr
+  client.on('reconnect', () => noteLink(host, 'try'));
   client.on('connect', () => {
+    noteLink(host, 'up');
     client.subscribe([`bkr/${topic}/s`, `bkr/${topic}/snd`, `bkr/${topic}/lib`], { qos: 1 });
     linkChanged();
     const now = Date.now();
@@ -183,7 +236,7 @@ function addBroker({ url, ...extra }) {
   client.on('message', (t, payload, packet) => handle(new TextDecoder().decode(payload), !!(packet && packet.retain)));
   client.on('offline', linkChanged);
   client.on('close', linkChanged);
-  client.on('error', () => { /* mqtt.js reconnects by itself */ });
+  client.on('error', (e) => noteLink(host, 'err', e)); // mqtt.js reconnects by itself
   links.push(client);
   return client;
 }
@@ -245,6 +298,7 @@ async function handle(text, retained = false) {
   if (!retained) {
     heardLive = Date.now();
     pendingSince = 0;
+    if (visit && visit.ans == null) visit.ans = Date.now() - visit.at;
   }
   if (again) {
     if (!retained) renderStateLine();
@@ -282,7 +336,7 @@ function sayHello() {
   const probe = navigator.getBattery
     ? navigator.getBattery().then((b) => ({ nb: Math.round(b.level * 100), nc: b.charging })).catch(() => ({ nb: -2 }))
     : Promise.resolve({ nb: -1 });
-  probe.then((extra) => send('hello', extra));
+  probe.then((extra) => send('hello', { ...extra, v: BUILD }));
 }
 
 // Battery: while the app is not on screen, drop the live connection and stop every timer. Anything a
@@ -296,11 +350,14 @@ function onVisibility() {
     heardLive = 0;
     pendingSince = 0;
     lastHello = 0;
+    startVisit('wake');
     openLink();
     sayHello();
     startTick();
     renderNow();
   } else {
+    hiddenAt = Date.now();
+    endVisit();
     clearTimeout(confirmTimer);
     confirmTimer = 0;
     if (seekPreview != null) {
@@ -1749,6 +1806,7 @@ function wire() {
   window.addEventListener('popstate', onPopState);
   // The glasses' connection comes back after charging or a restart: reconnect at once.
   window.addEventListener('online', () => {
+    if (visit) visit.onN = (visit.onN || 0) + 1; // each one restarts every link, so the report counts them
     if (document.visibilityState !== 'visible') return;
     closeLink();
     lastHello = 0;
@@ -1784,7 +1842,7 @@ async function main() {
   // A late web font can change label widths after the first fit.
   if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => { if (view.screen === 'sound') fitTools(); });
   registerServiceWorker();
-  if (document.visibilityState === 'visible') { openLink(); sayHello(); startTick(); }
+  if (document.visibilityState === 'visible') { startVisit('load'); openLink(); sayHello(); startTick(); }
 }
 
 main();

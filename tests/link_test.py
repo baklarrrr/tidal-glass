@@ -118,6 +118,26 @@ with sync_playwright() as p:
         check(NAME4, len(h) == 3 and "next" not in got, json.dumps([h, got]))
     guard(NAME4, t4)
 
+    # 5. The link report (2026-10-25: presses waited 20-60 s on the glasses, 2 s on a PC): one per visit,
+    # on its first broker connect, carrying the build, this visit so far and the previous visit's record.
+    NAME5 = "each visit sends one link report on its first connect, with the previous visit's record"
+    def t5():
+        def reports(i):
+            return page.evaluate("async (i) => (await Promise.all(window.__clients[i].sent.map((b) => openMessage(b)))).filter((m) => m.c === 'diag')", i)
+        first = [r for i in range(page.evaluate("window.__clients.length")) for r in reports(i)]
+        before = page.evaluate("window.__clients.length")
+        page.evaluate("endVisit(); startVisit('wake'); closeLink(); openLink();")
+        page.wait_for_timeout(100)
+        fresh = before + hosts()[before:].index("public.cloud.shiftr.io")
+        fire(fresh, "connect")
+        page.wait_for_timeout(300)
+        wake = reports(fresh)
+        ok_first = len({json.dumps(r["cur"], sort_keys=True) for r in first}) == 1 and first[0]["v"] >= 15 and first[0]["cur"]["k"] == "load" \
+            and isinstance(first[0]["cur"]["b"]["hivemq"]["up"], int)
+        ok_wake = len(wake) == 1 and wake[0]["cur"]["k"] == "wake" and wake[0]["prev"] and wake[0]["prev"]["k"] == "load"
+        check(NAME5, ok_first and ok_wake, json.dumps([first[:1], wake])[:400])
+    guard(NAME5, t5)
+
     check("no page errors", not errors, "; ".join(errors))
     browser.close()
 
