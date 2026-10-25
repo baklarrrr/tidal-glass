@@ -1,8 +1,8 @@
 """Regression tests for presses on Tidal Glass (run before every publish).
 
 Serves nothing itself: start `python -m http.server 47611 --bind 127.0.0.1 --directory webapp` first.
-The relay (ntfy.sh) is faked: the phone's state is fed in, and every command the page sends is
-decrypted with the page's own code and checked.
+The link to the phone (two MQTT brokers) is replaced by a fake one: the phone's state is fed in,
+and every command the page sends is decrypted with the page's own code and checked.
 
 Guards the 2026-10-25 bug: on the glasses a pinch moves the hand a little, and a pinch-and-drag
 volume gesture turned Play into a volume change. A press must always be a press.
@@ -33,28 +33,22 @@ with sync_playwright() as p:
     page = browser.new_context(viewport={"width": 600, "height": 600}).new_page()
     errors = []
     page.on("pageerror", lambda e: errors.append(str(e)))
-    sent = []
-
-    def relay(route):
-        req = route.request
-        if req.method == "POST":
-            sent.append(req.post_data)
-        route.fulfill(status=200, body="", headers={"Access-Control-Allow-Origin": "*"})
-
-    page.route("**/ntfy.sh/**", relay)
+    # The page uses this instead of the brokers; it records what would have been published.
+    page.add_init_script("""
+      window.__sent = [];
+      window.__testLink = { connected: true, publish(t, body) { window.__sent.push(body); }, end() {} };
+    """)
+    page.route("**/broker.*/**", lambda route: route.abort())
     page.goto(URL)
     page.wait_for_function("typeof key !== 'undefined' && key !== null")
     page.evaluate("s => { state = {...s, at: Date.now()}; lastHeard = Date.now(); renderNow(); }", STATE)
 
     def commands():
         """Decrypt everything sent so far with the page's own code; returns the command names."""
-        out = []
-        for body in sent:
-            out.append(page.evaluate("async b => (await openMessage(b)).c", body))
-        return out
+        return page.evaluate("async () => Promise.all(window.__sent.map(async b => (await openMessage(b)).c))")
 
     def reset():
-        sent.clear()
+        page.evaluate("window.__sent.length = 0")
 
     # 1. A press with hand movement (pointer moves 24 px between down and up) is still Play.
     reset()
@@ -111,6 +105,22 @@ with sync_playwright() as p:
         page.keyboard.press(k)
     page.wait_for_timeout(500)
     check("moving focus sends nothing", commands() == [], json.dumps(commands()))
+
+    # 7. A press while the link is down is kept and goes out the moment it reconnects.
+    reset()
+    page.evaluate("window.__testLink.connected = false")
+    page.focus("#next")
+    page.keyboard.press("Enter")
+    page.wait_for_timeout(300)
+    held = commands()
+    page.evaluate("window.__testLink.connected = true; flushOutbox()")
+    page.wait_for_timeout(300)
+    c = commands()
+    check("a press while offline is sent on reconnect", held == [] and c == ["next"], json.dumps([held, c]))
+
+    # 8. The old link's daily-limit message is gone for good.
+    source = page.evaluate("fetch('app.js').then(r => r.text())")
+    check("no daily-limit message left", "busy for today" not in source and "ntfy.sh" not in source)
 
     check("no page errors", not errors, "; ".join(errors))
     browser.close()

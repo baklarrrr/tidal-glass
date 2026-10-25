@@ -2,8 +2,9 @@
 
 // Tidal Glass web app for Meta Ray-Ban Display.
 // Shows what the official Tidal app is playing on the paired phone and sends presses back to it.
-// The phone and this page talk through two private ntfy.sh topics; every message is AES-GCM
-// encrypted with the key in this page's URL fragment, which browsers never send to a server.
+// The phone and this page talk through two public MQTT brokers on a private random topic; every
+// message is AES-GCM encrypted with the key in this page's URL fragment, which browsers never send
+// to a server.
 //
 // Input model (Neural Band or touchpad):
 //   swipe = move focus, pinch = press, system Back = one step back (browser history);
@@ -11,7 +12,6 @@
 //   in lists: swipe left = back, swipe right = open
 //   on the song bar: swipe left/right = skip 10 s, faster while you keep swiping
 
-const SERVER = 'https://ntfy.sh';
 const HISTORY_LIMIT = 4;   // the glasses keep at most five history entries including the first page
 const $ = (id) => document.getElementById(id);
 
@@ -28,8 +28,6 @@ let prevState = null;
 let lastHeard = 0;
 let pendingSince = 0;
 let lastHello = 0;
-let stream = null;
-let polling = false;
 let tickTimer = 0;
 let toastTimer = 0;
 let lastAction = '';
@@ -93,27 +91,95 @@ async function seal(obj) {
   return toB64url(out);
 }
 
+// ---- the link to the phone ----------------------------------------------------------------
+// Two free public MQTT brokers at once (EMQX and HiveMQ): no account, no daily cap, pushed both ways
+// in a tenth of a second, and either can be down without anything stopping. The phone keeps its
+// latest state retained there, so a reopened app shows it the moment it connects. Messages are
+// AES-GCM sealed here and on the phone; the brokers only carry ciphertext.
+
+const BROKERS = ['wss://broker.emqx.io:8084/mqtt', 'wss://broker.hivemq.com:8884/mqtt'];
+const OUTBOX_MAX_AGE = 60000;
+let links = [];
+let linkDownSince = 0;    // when the page started waiting for a broker (0 while one is connected)
+let outbox = [];          // sealed presses waiting for a connection: { body, at, expects }
+const recent = [];        // the last messages handled (the same one arrives from both brokers)
+
+function linkUp() {
+  return links.some((l) => l.connected);
+}
+
+function linkChanged() {
+  if (linkUp()) linkDownSince = 0;
+  else if (!linkDownSince) linkDownSince = Date.now();
+  $('stateText').textContent = stateLine();
+}
+
+function openLink() {
+  if (links.length) return;
+  // Tests (and only tests) supply their own link.
+  if (window.__testLink) { links = [window.__testLink]; window.__testLink.onMessage = handle; flushOutbox(); return; }
+  if (typeof mqtt === 'undefined') return;
+  linkDownSince = Date.now();
+  const id = Array.from(crypto.getRandomValues(new Uint8Array(6)), (b) => b.toString(16).padStart(2, '0')).join('');
+  for (const url of BROKERS) {
+    const client = mqtt.connect(url, {
+      clientId: `tgg-${id}-${links.length}`, clean: true, keepalive: 45, protocolVersion: 4,
+      reconnectPeriod: 1500, connectTimeout: 8000,
+    });
+    client.on('connect', () => {
+      client.subscribe([`bkr/${topic}/s`, `bkr/${topic}/snd`, `bkr/${topic}/lib`], { qos: 1 });
+      linkChanged();
+      flushOutbox();
+    });
+    client.on('message', (t, payload) => handle(new TextDecoder().decode(payload)));
+    client.on('offline', linkChanged);
+    client.on('close', linkChanged);
+    client.on('error', () => { /* mqtt.js reconnects by itself */ });
+    links.push(client);
+  }
+}
+
+function closeLink() {
+  const old = links;
+  links = [];
+  linkDownSince = 0;
+  for (const l of old) { try { l.end(true); } catch (e) { /* already closed */ } }
+}
+
+function flushOutbox() {
+  const live = links.filter((l) => l.connected);
+  if (!live.length) return;
+  const now = Date.now();
+  const due = outbox.filter((o) => now - o.at < OUTBOX_MAX_AGE);
+  outbox = [];
+  for (const o of due) {
+    if (o.expects) pendingSince = Date.now();
+    for (const l of live) l.publish(`bkr/${topic}/c`, o.body, { qos: 1 });
+  }
+}
+
 async function send(c, extra = {}) {
   const body = await seal({ c, ts: Date.now(), ...extra });
-  // One quick retry covers the moment the glasses' connection wakes up.
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      const r = await fetch(`${SERVER}/${topic}-c`, { method: 'POST', body });
-      if (r.status === 429) { showToast('The free link is busy for today. Try again shortly.'); return false; }
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      if (EXPECTS_REPLY.has(c)) pendingSince = Date.now();
-      return true;
-    } catch (e) {
-      if (attempt === 0) await new Promise((res) => setTimeout(res, 700));
-    }
+  const expects = EXPECTS_REPLY.has(c);
+  const live = links.filter((l) => l.connected);
+  if (!live.length) {
+    // Not connected this instant (just opened, or the glasses' network is waking): it goes out
+    // the moment a broker connects. The phone ignores a press it has already done.
+    outbox.push({ body, at: Date.now(), expects });
+    openLink();
+    return true;
   }
-  showToast('No connection. Check your phone has internet.');
-  return false;
+  if (expects) pendingSince = Date.now();
+  for (const l of live) l.publish(`bkr/${topic}/c`, body, { qos: 1 });
+  return true;
 }
 
 // ---- connection --------------------------------------------------------------------------
 
 async function handle(text) {
+  if (recent.includes(text)) return; // the same message from the other broker
+  recent.push(text);
+  if (recent.length > 12) recent.shift();
   let m;
   try { m = await openMessage(text); } catch (e) { return; }
   lastHeard = Date.now();
@@ -145,64 +211,16 @@ function sayHello() {
   probe.then((extra) => send('hello', extra));
 }
 
-async function catchUp() {
-  try {
-    const r = await fetch(`${SERVER}/${topic}-s/json?poll=1&since=latest`);
-    for (const line of (await r.text()).split('\n')) {
-      if (!line.trim()) continue;
-      const ev = JSON.parse(line);
-      if (ev.event === 'message') await handle(ev.message);
-    }
-  } catch (e) { /* the live stream still connects */ }
-}
-
-function openStream() {
-  if (stream || polling) return;
-  if (typeof EventSource === 'undefined') { poll(); return; }
-  let failures = 0;
-  stream = new EventSource(`${SERVER}/${topic}-s/sse`);
-  stream.addEventListener('message', (e) => {
-    try {
-      const ev = JSON.parse(e.data);
-      if (ev.event === 'message' && ev.message) handle(ev.message);
-    } catch (err) { /* keepalive */ }
-  });
-  stream.addEventListener('open', () => { failures = 0; sayHello(); });
-  stream.onerror = () => { if (++failures >= 4) { closeStream(); poll(); } };
-}
-
-function closeStream() {
-  if (stream) { stream.close(); stream = null; }
-}
-
-async function poll() {
-  if (polling) return;
-  polling = true;
-  let since = Math.floor(Date.now() / 1000) - 5;
-  sayHello();
-  while (polling) {
-    if (document.visibilityState === 'visible') {
-      try {
-        const r = await fetch(`${SERVER}/${topic}-s/json?poll=1&since=${since}`);
-        for (const line of (await r.text()).split('\n')) {
-          if (!line.trim()) continue;
-          const ev = JSON.parse(line);
-          if (ev.event === 'message') { since = ev.id; await handle(ev.message); }
-        }
-      } catch (e) { /* next round */ }
-    }
-    await new Promise((res) => setTimeout(res, 2500));
-  }
-}
-
-// Battery: while the app is not on screen, drop the live connection and stop every timer.
+// Battery: while the app is not on screen, drop the live connection and stop every timer. Coming
+// back, the retained state arrives the moment a broker connects.
 function onVisibility() {
   if (document.visibilityState === 'visible') {
-    catchUp().then(() => { openStream(); sayHello(); });
+    openLink();
+    sayHello();
     startTick();
     renderNow();
   } else {
-    closeStream();
+    closeLink();
     stopTick();
   }
 }
@@ -290,6 +308,7 @@ function hasTrack() {
 
 function stateLine() {
   if (!state) return lastHeard ? 'Waiting for your phone…' : 'Connecting to your phone…';
+  if (linkDownSince && Date.now() - linkDownSince > 5000) return 'Reconnecting…';
   if (pendingSince && Date.now() - pendingSince > 7000) return 'Your phone is not answering';
   if (!state.acc) return 'Phone needs notification access';
   if (!hasTrack()) return 'Tidal is idle';
@@ -707,8 +726,8 @@ function soundChanged() {
   sndEditAt = Date.now();
   if (view.screen === 'bands') renderBands(); else renderSound();
   clearTimeout(sndTimer);
-  // One message per pause in swiping; the phone and glasses share ntfy.sh's daily allowance.
-  sndTimer = setTimeout(flushSound, 700);
+  // One message per short pause in swiping, so the sound follows the slider almost at once.
+  sndTimer = setTimeout(flushSound, 250);
 }
 
 function dropPendingSound() {
@@ -1184,9 +1203,10 @@ function wire() {
   // The glasses' connection comes back after charging or a restart: reconnect at once.
   window.addEventListener('online', () => {
     if (document.visibilityState !== 'visible') return;
-    closeStream();
+    closeLink();
     lastHello = 0;
-    catchUp().then(() => { openStream(); sayHello(); });
+    openLink();
+    sayHello();
   });
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && view.screen !== ROOT.screen) { e.preventDefault(); history.back(); }
@@ -1214,9 +1234,7 @@ async function main() {
     registerVoiceTools();
   }
   registerServiceWorker();
-  await catchUp();
-  if (view.screen === 'now') focusDefault();
-  if (document.visibilityState === 'visible') { openStream(); startTick(); }
+  if (document.visibilityState === 'visible') { openLink(); sayHello(); startTick(); }
 }
 
 main();

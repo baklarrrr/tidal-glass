@@ -2,9 +2,10 @@
 
 // Keeps a copy of the app on the glasses so it still opens when the network is slow or briefly gone.
 // Network first, so an update shows up on the very next launch; the copy is only the fallback.
-// Only this site's own files are handled; the phone link (ntfy.sh) and artwork always go to the network.
-const CACHE = 'tidal-glass-v7';
-const SHELL = ['./', 'index.html', 'style.css', 'app.js', 'icon.svg', 'icon-mono.svg'];
+// Only this site's own files are handled; the phone link (MQTT over WebSocket) and artwork always go
+// to the network.
+const CACHE = 'tidal-glass-v8';
+const SHELL = ['./', 'index.html', 'style.css', 'app.js', 'vendor/mqtt.min.js', 'icon.svg', 'icon-mono.svg'];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(SHELL)).then(() => self.skipWaiting()));
