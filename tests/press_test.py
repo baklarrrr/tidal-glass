@@ -16,8 +16,6 @@ Swipes use Chrome's spatial navigation (as the glasses move focus); the glasses'
 import io
 import json
 import sys
-import threading
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from PIL import Image
 from playwright.sync_api import sync_playwright
@@ -330,25 +328,13 @@ with sync_playwright() as p:
     NAME26 = "calm cover cap: pale cover below 50%, mid cover at 50%, a no-CORS cover still shows at 40%"
     page.route("https://art.test/pale.jpg", lambda r: r.fulfill(status=200, body=cover((240, 236, 228)), headers={"Content-Type": "image/jpeg", "Access-Control-Allow-Origin": "*"}))
     page.route("https://art.test/mid.jpg", lambda r: r.fulfill(status=200, body=cover((120, 100, 110)), headers={"Content-Type": "image/jpeg", "Access-Control-Allow-Origin": "*"}))
-    # Playwright adds CORS headers to the responses it fakes, so the server without CORS is a real one.
-    pale = cover((240, 236, 228))
-
-    class NoCors(BaseHTTPRequestHandler):
-        def do_GET(self):
-            self.send_response(200)
-            self.send_header("Content-Type", "image/jpeg")
-            self.send_header("Content-Length", str(len(pale)))
-            self.end_headers()
-            self.wfile.write(pale)
-
-        def log_message(self, *args):
-            pass
-    plain = ThreadingHTTPServer(("127.0.0.1", 0), NoCors)
-    threading.Thread(target=plain.serve_forever, daemon=True).start()
+    # A server that does not allow this page to read its images. (Playwright adds an allowing header to
+    # the responses it fakes when there is none, so this one names another site instead.)
+    page.route("https://art.test/plain.jpg", lambda r: r.fulfill(status=200, body=cover((240, 236, 228)), headers={"Content-Type": "image/jpeg", "Access-Control-Allow-Origin": "https://another-site.example"}))
 
     def t26():
         caps = []
-        for i, url in enumerate(("https://art.test/pale.jpg", "https://art.test/mid.jpg", f"http://127.0.0.1:{plain.server_address[1]}/plain.jpg")):
+        for i, url in enumerate(("https://art.test/pale.jpg", "https://art.test/mid.jpg", "https://art.test/plain.jpg")):
             page.evaluate("([s, u, t]) => { state = {...s, art: u, at: Date.now() + t}; pendingSince = 0; renderNow(); }", [STATE, url, 10000 + i * 1000])
             page.wait_for_function("() => { const a = document.getElementById('art'); return a.complete && !a.hidden && a.naturalWidth > 0; }", timeout=5000)
             page.wait_for_timeout(100)
@@ -356,7 +342,6 @@ with sync_playwright() as p:
         check(NAME26, float(caps[0][0] or 1) < 0.4 and caps[0][1] == "anonymous" and caps[1][0] == "0.500"
               and caps[2] == ["0.400", None], json.dumps(caps))
     guard(NAME26, t26)
-    plain.shutdown()
     page.evaluate("s => { state = {...s, at: Date.now() + 20000}; renderNow(); }", STATE)
 
     # 16. Sound Lab (Director review R8-R10): actions wait for the phone, notes stay in the header.
