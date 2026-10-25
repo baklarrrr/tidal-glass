@@ -6,18 +6,32 @@ and every command the page sends is decrypted with the page's own code and check
 
 Guards the 2026-10-25 bug: on the glasses a pinch moves the hand a little, and a pinch-and-drag
 volume gesture turned Play into a volume change. A press must always be a press.
+Also guards the Photographer review fixes of 2026-10-25 (checks 17 onwards): confirmations in the
+name line, list swipes, Sound Lab focus, calm and its empty state, and the calm cover cap. Each of
+those runs on its own, so an older build reports every one that fails instead of stopping at the first.
+Swipes use Chrome's spatial navigation (as the glasses move focus); the glasses' own browser may differ.
 
-  python webapp/tests/press_test.py
+  python webapp/tests/press_test.py [base_url]   (default http://127.0.0.1:47611/)
 """
+import io
 import json
 import sys
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+from PIL import Image
 from playwright.sync_api import sync_playwright
 
 KEY = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
-URL = f"http://127.0.0.1:47611/index.html?test=1#t=tgpresstest&k={KEY}"
+BASE = (sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:47611/").rstrip("/") + "/"
+URL = f"{BASE}index.html?test=1#t=tgpresstest&k={KEY}"
 STATE = {"t": "state", "acc": True, "ses": True, "play": False, "buf": False, "ti": "Test song", "ar": "Test artist",
          "al": "Test album", "dur": 200000, "pos": 50000, "liked": False, "seek": True, "vol": "8/15", "q": [], "qa": -1}
+# A library page as the phone sends it (pages of 10); more than fits on screen.
+LIB = {"t": "lib", "id": None, "title": "Library", "page": 0, "more": True,
+       "items": [{"id": f"r{i}", "ti": f"Song {i + 1}", "su": "Artist", "b": False, "p": True} for i in range(10)]}
+ACTIVE = "(() => { const a = document.activeElement; const t = a.querySelector && a.querySelector('.ti'); return t ? t.textContent : a.id; })()"
+LINK = "window.__sent = []; window.__testLink = { connected: true, publish(t, body) { window.__sent.push(body); }, end() {} };"
 
 failures = []
 
@@ -28,16 +42,27 @@ def check(name, ok, detail=""):
         failures.append(name)
 
 
+def guard(name, fn):
+    """Runs one check; a missing element or function counts as that check failing, not the whole run."""
+    try:
+        fn()
+    except Exception as e:  # noqa: BLE001 - reported as a failure of this check
+        check(name, False, f"{type(e).__name__}: {str(e).splitlines()[0][:160]}")
+
+
+def cover(rgb):
+    buf = io.BytesIO()
+    Image.new("RGB", (64, 64), rgb).save(buf, "JPEG", quality=90)
+    return buf.getvalue()
+
+
 with sync_playwright() as p:
     browser = p.chromium.launch(channel="chrome", args=["--enable-spatial-navigation"])
     page = browser.new_context(viewport={"width": 600, "height": 600}).new_page()
     errors = []
     page.on("pageerror", lambda e: errors.append(str(e)))
     # The page uses this instead of the brokers; it records what would have been published.
-    page.add_init_script("""
-      window.__sent = [];
-      window.__testLink = { connected: true, publish(t, body) { window.__sent.push(body); }, end() {} };
-    """)
+    page.add_init_script(LINK)
     page.route("**/broker.*/**", lambda route: route.abort())
     page.goto(URL)
     page.wait_for_function("typeof key !== 'undefined' && key !== null")
@@ -136,10 +161,11 @@ with sync_playwright() as p:
     page.keyboard.press("Enter")
     page.wait_for_timeout(3000)
     c = commands()
-    starting = page.evaluate("[stateLine(), document.getElementById('toast').hidden]")
-    check("closed Tidal: says so, Play sends one play, shows 'Starting Tidal'",
+    # Since the 2026-10-25 review the headline says it (the top line stays about the link).
+    starting = page.evaluate("[$('title').textContent, $('artist').textContent, stateLine()]")
+    check("closed Tidal: says so, Play sends one play, the headline says 'Starting Tidal…'",
           closed_title[0] == "Tidal is closed" and "Press Play" in closed_title[1] and c == ["play"]
-          and starting[0] == "Starting Tidal…", json.dumps([closed_title, c, starting]))
+          and starting[0] == "Starting Tidal…" and starting[2] == "Phone connected", json.dumps([closed_title, c, starting]))
     page.evaluate("async s => { await handle(await seal({...s, at: Date.now() + 1000, play: true})); }", STATE)
     after = page.evaluate("[stateLine(), startingSince]")
     check("once Tidal is up, the screen shows the song", after == ["Playing", 0], json.dumps(after))
@@ -199,11 +225,144 @@ with sync_playwright() as p:
     old = page.evaluate("document.querySelector('#gbat').hidden")
     check("battery: own reading with a bolt; a phone report over 30 min old is hidden",
           own[0] is False and own[1] == "62%" and own[2] != "none" and old is True, json.dumps([own, old]))
+    page.evaluate("browserBattery = null; drawBattery();")
+
+    # 17. Confirmations share the name line under the controls: one line, cut with "…", over nothing
+    # (Photographer review 2026-10-25, T31). The overlay toast no longer exists.
+    long_title = "Lose Yourself to Dance (feat. Pharrell Williams) [Extended Club Mix, 2013 Remaster]"[:80]
+
+    def t17():
+        page.evaluate("s => { state = {...s, at: Date.now()}; pendingSince = 0; startingSince = 0; renderNow(); }", STATE)
+        page.focus("#next")
+        page.wait_for_timeout(300)
+        page.keyboard.press("Enter")
+        page.evaluate("async s => { await handle(await seal({...s, ti: s.lt, at: Date.now() + 2000})); }", {**STATE, "lt": long_title})
+        page.wait_for_timeout(300)
+        line = page.evaluate("""() => {
+          const n = $('notice'); const r = n.getBoundingClientRect();
+          const range = document.createRange(); range.selectNodeContents(n);
+          const lines = new Set([...range.getClientRects()].map((q) => Math.round(q.top))).size;
+          const over = [...document.querySelectorAll('#now button, #now .words, #seek')].some((el) => { const q = el.getBoundingClientRect();
+            return q.width && !(q.right <= r.left || q.left >= r.right || q.bottom <= r.top || q.top >= r.bottom); });
+          return [n.classList.contains('on'), n.textContent, lines, n.scrollWidth > n.clientWidth, $('tip').classList.contains('on'), over,
+            !!document.getElementById('toast'), r.bottom <= 600]; }""")
+        check(NAME17, line[0] and line[1] == long_title and line[2] == 1 and line[3] and not line[4] and not line[5]
+              and not line[6] and line[7], json.dumps(line))
+    NAME17 = "a long new title is confirmed on one line in the name line, cut with …, over nothing"
+    guard(NAME17, t17)
+
+    # 18. Like: the confirmation replaces the button's name while it shows, so the two never disagree (T32).
+    NAME18 = "Like: 'Added to My Collection' shows in place of the button's name"
+
+    def t18():
+        page.wait_for_timeout(2300)
+        page.evaluate("s => { state = {...s, liked: false, at: Date.now() + 2500}; pendingSince = 0; renderNow(); }", STATE)
+        page.focus("#like")
+        page.wait_for_timeout(450)
+        page.keyboard.press("Enter")
+        page.evaluate("async s => { await handle(await seal({...s, liked: true, at: Date.now() + 5000})); }", STATE)
+        page.wait_for_timeout(300)
+        like = page.evaluate("[$('notice').classList.contains('on'), $('notice').textContent, $('tip').classList.contains('on')]")
+        check(NAME18, like == [True, "Added to My Collection", False], json.dumps(like))
+    guard(NAME18, t18)
+
+    # 19. Library: every swipe down moves exactly one row, also below the fold, Down from the last row
+    # reaches More and Up from More returns to the last row (T62, W3).
+    NAME19 = "library: one row per swipe, then More, and Up from More is the last row"
+    names = [it["ti"] for it in LIB["items"]]
+
+    def t19():
+        page.wait_for_timeout(2300)
+        page.evaluate("s => { state = {...s, liked: false, at: Date.now() + 6000}; pendingSince = 0; renderNow(); }", STATE)
+        page.focus("#library")
+        page.keyboard.press("Enter")
+        page.wait_for_timeout(300)
+        page.evaluate("async m => { await handle(await seal(m)); }", LIB)
+        page.wait_for_timeout(300)
+        walk = [page.evaluate(ACTIVE)]
+        for _ in range(10):
+            page.keyboard.press("ArrowDown")
+            page.wait_for_timeout(150)
+            walk.append(page.evaluate(ACTIVE))
+        page.keyboard.press("ArrowUp")
+        page.wait_for_timeout(150)
+        walk.append(page.evaluate(ACTIVE))
+        check(NAME19, walk == names + ["more", names[-1]], json.dumps(walk))
+    guard(NAME19, t19)
+
+    # 20. Choosing a song there: back on Now Playing, "Playing …" holds the line against the Library
+    # button's name, which shows once the confirmation ends.
+    NAME20 = "library pick: 'Playing …' shows on Now Playing, then the focused button's name"
+
+    def t20():
+        page.focus("#items li:nth-child(2) button")
+        page.keyboard.press("Enter")
+        page.wait_for_timeout(600)
+        back = page.evaluate("[view.screen, $('notice').classList.contains('on'), $('notice').textContent, $('tip').classList.contains('on'), document.activeElement.id]")
+        page.wait_for_timeout(2300)
+        later = page.evaluate("[$('notice').classList.contains('on'), $('tip').classList.contains('on'), $('tip').textContent]")
+        check(NAME20, back == ["now", True, f"Playing {names[1]}", False, "library"] and later == [False, True, "Your Tidal library"],
+              json.dumps([back, later]))
+    guard(NAME20, t20)
+    page.evaluate("history.state && history.state.screen !== 'now' && history.back()")
+    page.wait_for_timeout(300)
+
+    # 25. Calm: a focused liked heart keeps a focus ring brighter than every other ring, and a low
+    # battery chip stays at full brightness (Photographer review 2026-10-25, items 2 and 3).
+    NAME25 = "calm: the focused liked heart has the brightest ring; the 10% chip stays at full brightness"
+
+    def t25():
+        page.evaluate("s => { state = {...s, liked: true, gb: 10, at: Date.now() + 9000}; pendingSince = 0; renderNow(); }", STATE)
+        page.focus("#like")
+        page.wait_for_timeout(200)
+        page.evaluate("lastInputAt = Date.now() - 20000; checkCalm();")
+        page.wait_for_timeout(1200)
+        rings = page.evaluate("""() => { const b = (id) => getComputedStyle(document.getElementById(id)).borderTopColor;
+          return [document.body.classList.contains('calm'), b('like'), b('toggle'), b('next'), b('queue'),
+            getComputedStyle($('gbat')).opacity, getComputedStyle($('gbat')).color, getComputedStyle(document.querySelector('.topline .state')).opacity]; }""")
+        page.evaluate("wakeUp()")
+        check(NAME25, rings[0] and rings[1] == "rgba(47, 216, 236, 0.45)" and rings[2] == rings[3] == rings[4] == "rgba(255, 255, 255, 0.16)"
+              and rings[5] == "1" and rings[6] == "rgb(255, 176, 138)" and rings[7] == "0.6", json.dumps(rings))
+    guard(NAME25, t25)
+
+    # 26. Calm cover cap: a pale cover dims further than 50% in calm; a cover from a server without CORS
+    # still shows, with the fixed cap (item 10). A cover of typical brightness keeps 50%.
+    NAME26 = "calm cover cap: pale cover below 50%, mid cover at 50%, a no-CORS cover still shows at 40%"
+    page.route("https://art.test/pale.jpg", lambda r: r.fulfill(status=200, body=cover((240, 236, 228)), headers={"Content-Type": "image/jpeg", "Access-Control-Allow-Origin": "*"}))
+    page.route("https://art.test/mid.jpg", lambda r: r.fulfill(status=200, body=cover((120, 100, 110)), headers={"Content-Type": "image/jpeg", "Access-Control-Allow-Origin": "*"}))
+    # Playwright adds CORS headers to the responses it fakes, so the server without CORS is a real one.
+    pale = cover((240, 236, 228))
+
+    class NoCors(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("Content-Type", "image/jpeg")
+            self.send_header("Content-Length", str(len(pale)))
+            self.end_headers()
+            self.wfile.write(pale)
+
+        def log_message(self, *args):
+            pass
+    plain = ThreadingHTTPServer(("127.0.0.1", 0), NoCors)
+    threading.Thread(target=plain.serve_forever, daemon=True).start()
+
+    def t26():
+        caps = []
+        for i, url in enumerate(("https://art.test/pale.jpg", "https://art.test/mid.jpg", f"http://127.0.0.1:{plain.server_address[1]}/plain.jpg")):
+            page.evaluate("([s, u, t]) => { state = {...s, art: u, at: Date.now() + t}; pendingSince = 0; renderNow(); }", [STATE, url, 10000 + i * 1000])
+            page.wait_for_function("() => { const a = document.getElementById('art'); return a.complete && !a.hidden && a.naturalWidth > 0; }", timeout=5000)
+            page.wait_for_timeout(100)
+            caps.append(page.evaluate("[$('artwrap').style.getPropertyValue('--calm-art'), $('art').getAttribute('crossorigin')]"))
+        check(NAME26, float(caps[0][0] or 1) < 0.4 and caps[0][1] == "anonymous" and caps[1][0] == "0.500"
+              and caps[2] == ["0.400", None], json.dumps(caps))
+    guard(NAME26, t26)
+    plain.shutdown()
+    page.evaluate("s => { state = {...s, at: Date.now() + 20000}; renderNow(); }", STATE)
 
     # 16. Sound Lab (Director review R8-R10): actions wait for the phone, notes stay in the header.
     sp = browser.new_context(viewport={"width": 600, "height": 600}).new_page()
     sp.on("pageerror", lambda e: errors.append(str(e)))
-    sp.add_init_script("window.__sent = []; window.__testLink = { connected: true, publish(t, body) { window.__sent.push(body); }, end() {} };")
+    sp.add_init_script(LINK)
     sp.goto(URL.replace("index.html?test=1", "index.html?app=sound&test=1"))
     sp.wait_for_function("typeof key !== 'undefined' && key !== null")
     SND = {"t": "snd", "at": 1, "s": {"on": True, "preset": "Open-ear", "bass": 2, "mids": 0, "treble": 1, "clarity": 3, "loud": 2, "bal": 0, "bands": [0] * 10},
@@ -224,12 +383,95 @@ with sync_playwright() as p:
     sp.evaluate("sndPending = null; renderSoundStatus();")
     check("Sound Lab: no confirmation in 7 s says so", late == "Your phone did not confirm. Try again.", json.dumps(late))
     sp.evaluate("soundNote('Back to flat')")
-    note = sp.evaluate("[$('sndStateText').textContent, $('toast').hidden]")
+    # The overlay toast is gone for good (2026-10-25), so "no toast" is now "no toast element".
+    note = sp.evaluate("[$('sndStateText').textContent, !document.getElementById('toast')]")
     check("Sound Lab notes sit in the header, not over the controls", note == ["Back to flat", True], json.dumps(note))
     sp.evaluate("sndNote = null; linkDownSince = Date.now() - 6000; renderSoundStatus();")
     recon = sp.evaluate("$('sndStateText').textContent")
     check("Sound Lab says Reconnecting… when the link is down", recon == "Reconnecting…", json.dumps(recon))
+    sp.evaluate("linkDownSince = 0; sndPending = null; renderSoundStatus();")
+
+    # 21. Sound Lab: one swipe down from On/Off lands on Preset, never on the list itself (W1 step00);
+    # Up from Preset is On/Off again, so comparing stays one swipe away.
+    NAME21 = "Sound Lab: Down from On/Off is Preset, Up from Preset is On/Off"
+
+    def t21():
+        sp.evaluate("async m => { await handle(await seal({...m, at: 3})); }", SND)
+        sp.focus("#sndPower")
+        sp.keyboard.press("ArrowDown")
+        sp.wait_for_timeout(200)
+        down = sp.evaluate("document.activeElement.id")
+        sp.keyboard.press("ArrowUp")
+        sp.wait_for_timeout(200)
+        up = sp.evaluate("document.activeElement.id")
+        check(NAME21, [down, up] == ["srow-preset", "sndPower"], json.dumps([down, up]))
+    guard(NAME21, t21)
+
+    # 22. Sound Lab: every swipe down moves one row; the actions are one to five swipes from Preset.
+    NAME22 = "Sound Lab: one row per swipe; Fine-tune, My sounds, Test, Reset follow On/Off"
+
+    def t22():
+        sp.focus("#srow-preset")
+        rows = []
+        for _ in range(6):
+            sp.keyboard.press("ArrowDown")
+            sp.wait_for_timeout(150)
+            rows.append(sp.evaluate("document.activeElement.id"))
+        sp.focus("#srow-preset")
+        sp.keyboard.press("ArrowUp")
+        tools = []
+        for _ in range(4):
+            sp.keyboard.press("ArrowRight")
+            sp.wait_for_timeout(120)
+            tools.append(sp.evaluate("document.activeElement.id"))
+        check(NAME22, rows == ["srow-bass", "srow-mids", "srow-treble", "srow-clarity", "srow-loud", "srow-bal"]
+              and tools == ["sndFine", "sndSlots", "sndTest", "sndReset"], json.dumps([rows, tools]))
+    guard(NAME22, t22)
+
+    # 23. Calm in Sound Lab: 15 s untouched dims it; the first swipe wakes it and still changes the value;
+    # no calm while the header shows a warning (no confirmation, not answering, reconnecting).
+    NAME23 = "Sound Lab calm: dims after 15 s, a swipe wakes it and still acts, never over a warning"
+
+    def t23():
+        sp.focus("#srow-bass")
+        sp.evaluate("window.__sent.length = 0; lastInputAt = Date.now() - 20000; checkCalm();")
+        calm = sp.evaluate("document.body.classList.contains('calm')")
+        bass_before = sp.evaluate("snd.s.bass")
+        sp.keyboard.press("ArrowRight")
+        sp.wait_for_timeout(450)
+        woke = sp.evaluate("[document.body.classList.contains('calm'), snd.s.bass]")
+        sent = sp.evaluate("async () => Promise.all(window.__sent.map(async b => (await openMessage(b)).c))")
+        warns = []
+        for setup in ("sndPending = {doing: 'Saving…', check: () => false, at: Date.now() - 8000};",
+                      "sndPending = null; pendingSince = Date.now() - 8000;",
+                      "pendingSince = 0; linkDownSince = Date.now() - 6000;"):
+            sp.evaluate(setup + " renderSoundStatus(); lastInputAt = Date.now() - 20000; checkCalm();")
+            warns.append(sp.evaluate("[$('sndStateText').textContent, document.body.classList.contains('calm')]"))
+        sp.evaluate("linkDownSince = 0; sndPending = null; renderSoundStatus(); wakeUp();")
+        check(NAME23, calm and woke == [False, bass_before + 1] and "sndSet" in sent and all(w[1] is False for w in warns),
+              json.dumps([calm, woke, sent, warns]))
+    guard(NAME23, t23)
     sp.close()
+
+    # 24. Sound Lab with nothing from the phone yet: no made-up sliders, no On/Off that does nothing; when
+    # the sound arrives the controls show and Preset has focus, so the next swipe works.
+    NAME24 = "Sound Lab without data shows an honest empty state, then Preset when the sound arrives"
+    sq = browser.new_context(viewport={"width": 600, "height": 600}).new_page()
+    sq.on("pageerror", lambda e: errors.append(str(e)))
+    sq.add_init_script(LINK)
+    sq.goto(URL.replace("index.html?test=1", "index.html?app=sound&test=1"))
+    sq.wait_for_function("typeof key !== 'undefined' && key !== null")
+    sq.wait_for_timeout(300)
+
+    def t24():
+        vis = "id => { const el = document.getElementById(id); return !!(el && el.getClientRects().length); }"
+        empty = [sq.evaluate(vis, i) for i in ("sndEmpty", "sndRows", "sndPower", "curve")]
+        sq.evaluate("async m => { await handle(await seal(m)); }", SND)
+        sq.wait_for_timeout(200)
+        filled = [sq.evaluate(vis, i) for i in ("sndEmpty", "sndRows", "sndPower")] + [sq.evaluate("document.activeElement.id")]
+        check(NAME24, empty == [True, False, False, False] and filled == [False, True, True, "srow-preset"], json.dumps([empty, filled]))
+    guard(NAME24, t24)
+    sq.close()
 
     # 8. The old link's daily-limit message is gone for good.
     source = page.evaluate("fetch('app.js').then(r => r.text())")
