@@ -131,7 +131,7 @@ function linkUp() {
 // (Bakar 2026-10-25: there a press waited 20-60 s for a broker; on a PC 2 s). Sent sealed once per
 // visit, on its first broker connect, with the previous visit's whole record (kept here when the page
 // is hidden, so a visit that never reached the phone still gets reported). The phone ignores it.
-const BUILD = 15;
+const BUILD = 16;
 let visit = null;
 let hiddenAt = 0;
 
@@ -178,8 +178,36 @@ function endVisit() {
 
 function linkChanged() {
   if (linkUp()) linkDownSince = 0;
-  else if (!linkDownSince) linkDownSince = Date.now();
+  else {
+    if (!linkDownSince) linkDownSince = Date.now();
+    armHedge();
+  }
   renderStateLine();
+}
+
+// A try that hangs costs a whole connect timeout. On the glasses a fresh open sometimes sat 10-14 s while every
+// broker's first tries timed out together (link reports, 2026-10-25 19:13), so when nothing has connected for
+// HEDGE_AFTER a second, fresh connection to shiftr.io (the broker the phone is always on) is tried beside the stuck
+// one. The first shiftr connection to connect stays; the other is closed.
+const HEDGE_AFTER = 3000;
+let hedgeTimer = 0;
+
+function armHedge() {
+  if (hedgeTimer || !links.length || window.__testLink) return;
+  hedgeTimer = setTimeout(() => {
+    hedgeTimer = 0;
+    if (linkUp() || links.filter((l) => l.host === 'shiftr').length > 1) return;
+    if (visit) visit.hedge = Date.now() - visit.at;
+    addBroker(BROKERS[2]);
+  }, HEDGE_AFTER);
+}
+
+// Two shiftr connections: keep the one that connected, close the other.
+function dropSpareShiftr(kept) {
+  for (const l of links.filter((x) => x !== kept && x.host === 'shiftr')) {
+    links = links.filter((x) => x !== l);
+    try { l.end(true); } catch (e) { /* already closed */ }
+  }
 }
 
 // The link library is a large file. On the first launch after an update the previous offline copy
@@ -210,16 +238,28 @@ function openLink() {
   linkDownSince = Date.now();
   linkId = Array.from(crypto.getRandomValues(new Uint8Array(6)), (b) => b.toString(16).padStart(2, '0')).join('');
   for (const b of BROKERS) addBroker(b);
+  armHedge();
 }
 
+// Connect timeout 6 s (was 8 s): the slowest successful connect the glasses reported was 4.1 s, and every try
+// that hangs costs the whole timeout before the next one.
+let clientSeq = 0;
 function addBroker({ url, ...extra }) {
   const client = mqtt.connect(url, {
-    clientId: `tgg-${linkId}-${links.length}`, clean: true, keepalive: 45, protocolVersion: 4,
-    reconnectPeriod: 1500, connectTimeout: 8000, ...extra,
+    clientId: `tgg-${linkId}-${clientSeq++}`, clean: true, keepalive: 45, protocolVersion: 4,
+    reconnectPeriod: 1000, connectTimeout: 6000, ...extra,
   });
   const host = new URL(url).hostname.split('.').slice(-2, -1)[0]; // emqx, hivemq, shiftr
+  client.host = host;
   client.on('reconnect', () => noteLink(host, 'try'));
   client.on('connect', () => {
+    if (host === 'shiftr') {
+      // The other shiftr connection got there first: this one is not needed.
+      if (links.some((l) => l !== client && l.host === 'shiftr' && l.connected)) { dropSpareShiftr(links.find((l) => l !== client && l.host === 'shiftr' && l.connected)); return; }
+      dropSpareShiftr(client);
+    }
+    clearTimeout(hedgeTimer);
+    hedgeTimer = 0;
     noteLink(host, 'up');
     client.subscribe([`bkr/${topic}/s`, `bkr/${topic}/snd`, `bkr/${topic}/lib`], { qos: 1 });
     linkChanged();
@@ -246,6 +286,8 @@ function closeLink() {
   links = [];
   linkDownSince = 0;
   sentLately = [];
+  clearTimeout(hedgeTimer);
+  hedgeTimer = 0;
   for (const l of old) { try { l.end(true); } catch (e) { /* already closed */ } }
 }
 

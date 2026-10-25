@@ -138,6 +138,29 @@ with sync_playwright() as p:
         check(NAME5, ok_first and ok_wake, json.dumps([first[:1], wake])[:400])
     guard(NAME5, t5)
 
+    # 6. 2026-10-25 19:13 link report: a fresh open sat 14 s while every first try hung. Nothing connected for 3 s:
+    # a second, fresh shiftr connection; the first shiftr connection to connect stays and the other is closed.
+    NAME6 = "nothing connected for 3 s: a second shiftr try; the first to connect stays, the other closes"
+    def t6():
+        hp = browser.new_context(viewport={"width": 600, "height": 600}).new_page()
+        hp.on("pageerror", lambda e: errors.append(str(e)))
+        hp.route("**/vendor/mqtt.min.js", lambda r: r.fulfill(status=200, content_type="application/javascript", body=FAKE_MQTT))
+        hp.goto(URL)
+        hp.wait_for_function("window.__clients && window.__clients.length === 3")
+        early = hp.evaluate("window.__clients.length")
+        hp.wait_for_timeout(3400)
+        after = hp.evaluate("window.__clients.map((c) => new URL(c.url).hostname)")
+        hedge = len(after) - 1
+        hp.evaluate("(i) => window.__clients[i].fire('connect')", hedge)  # the fresh try gets there first
+        hp.wait_for_timeout(200)
+        left = hp.evaluate("links.map((l) => l.host)")
+        first_shiftr = after.index("public.cloud.shiftr.io")
+        dropped = hp.evaluate("(i) => !links.includes(window.__clients[i])", first_shiftr)
+        hp.close()
+        check(NAME6, early == 3 and after.count("public.cloud.shiftr.io") == 2 and left.count("shiftr") == 1 and dropped,
+              json.dumps([early, after, left, dropped]))
+    guard(NAME6, t6)
+
     check("no page errors", not errors, "; ".join(errors))
     browser.close()
 
