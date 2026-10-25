@@ -115,6 +115,13 @@ button:focus { border-color: var(--accent); background: var(--accent-soft); box-
 button:active { transform: scale(0.94); }
 #like[aria-pressed="true"] { color: var(--accent); border-color: rgba(47, 216, 236, 0.7); }
 
+/* Additive display: a label cannot cover what is behind it, so it gets its own reserved line. */
+.tip {
+  margin-block-start: -6px; min-block-size: 24px; text-align: center;
+  font-size: 19px; font-weight: 650; letter-spacing: 0.01em; color: var(--accent); opacity: 0;
+}
+.tip.on { opacity: 1; }
+
 .pill-btn { border-radius: 999px; padding: 0 22px 0 16px; block-size: 56px; display: inline-flex; align-items: center; gap: 8px; font-size: 19px; }
 .pill-btn svg { inline-size: 22px; block-size: 22px; fill: none; stroke: currentColor; stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; }
 #more { padding: 0 16px 0 22px; }
@@ -137,6 +144,8 @@ button:active { transform: scale(0.94); }
 #items .su { display: block; font-size: 15px; color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #items .current .ti, #items .current > svg { color: var(--accent); }
 .listnav { margin-top: auto; }
+.listnav:not(:has(button:not([hidden]))) { display: none; }
+#listTitle:focus { outline: none; }
 
 /* ---- setup ------------------------------------------------------------------------------ */
 .hero { inline-size: 72px; block-size: 72px; color: var(--accent); margin-bottom: 8px; }
@@ -150,4 +159,5 @@ button:active { transform: scale(0.94); }
 
 @media (prefers-reduced-motion: no-preference) {
   button, .seek { transition: box-shadow 140ms ease, background-color 140ms ease, border-color 140ms ease, transform 90ms ease; }
+  .tip { transition: opacity 180ms ease; }
 }

@@ -6,7 +6,8 @@
 // encrypted with the key in this page's URL fragment, which browsers never send to a server.
 //
 // Input model (Neural Band or touchpad):
-//   swipe = move focus, pinch = press, system Back = one step back (browser history)
+//   swipe = move focus, pinch = press, system Back = one step back (browser history);
+//   on Now Playing, Back opens the glasses' own menu and a second Back leaves the app
 //   in lists: swipe left = back, swipe right = open
 //   on the song bar: swipe left/right = skip 10 s, faster while you keep swiping
 //   pinch and drag up/down anywhere on Now Playing = volume
@@ -220,6 +221,42 @@ function showToast(text) {
   toastTimer = setTimeout(() => { t.hidden = true; }, 1600);
 }
 
+// ---- button names: shown briefly when focus lands, so icons never need guessing -------------
+
+// Each name says what the next press does.
+const TIPS = {
+  prev: () => 'Previous song',
+  toggle: () => (state && state.play ? 'Pause' : 'Play'),
+  next: () => 'Next song',
+  like: () => (state && state.liked ? 'Remove from My Collection' : 'Add to My Collection'),
+  queue: () => 'Up next',
+  library: () => 'Your Tidal library',
+  voldown: () => 'Volume down',
+  volup: () => 'Volume up',
+  seek: () => 'Swipe left or right to skip',
+};
+let tipFor = null;
+let tipShow = 0;
+let tipHide = 0;
+
+function showTip(el) {
+  const tip = $('tip');
+  clearTimeout(tipShow);
+  clearTimeout(tipHide);
+  tipFor = el && TIPS[el.id] ? el.id : null;
+  if (!tipFor) { tip.classList.remove('on'); return; }
+  // A short wait keeps quick swipes from flashing every name on the way past.
+  tipShow = setTimeout(() => {
+    tip.textContent = TIPS[tipFor]();
+    tip.classList.add('on');
+    tipHide = setTimeout(() => tip.classList.remove('on'), 2200);
+  }, 160);
+}
+
+function refreshTip() {
+  if (tipFor && $('tip').classList.contains('on')) $('tip').textContent = TIPS[tipFor]();
+}
+
 // ---- Now Playing -------------------------------------------------------------------------
 
 function position() {
@@ -300,6 +337,7 @@ function renderNow() {
   seek.classList.toggle('disabled', !(track && s.dur));
   seek.tabIndex = canSeek ? 0 : -1;
   if (focused && focused.hidden && view.screen === 'now') focusDefault();
+  refreshTip();
   tick();
 }
 
@@ -482,7 +520,7 @@ function itemButton(id, title, sub, icon, onPress, opts = {}) {
 function focusItem(id) {
   const items = $('items');
   const match = id != null ? items.querySelector(`button[data-id="${CSS.escape(String(id))}"]`) : null;
-  (match || items.querySelector('button') || $('back')).focus();
+  (match || items.querySelector('button') || $('listTitle')).focus();
 }
 
 function renderQueue(fresh) {
@@ -511,7 +549,7 @@ function openLibraryView() {
   $('items').textContent = '';
   $('more').hidden = true;
   $('listNote').textContent = 'Loading…';
-  $('back').focus();
+  $('listTitle').focus();
   send('lib', { id: view.id ?? null, title: view.title || 'Library', page: view.page || 0 });
 }
 
@@ -687,7 +725,6 @@ function wire() {
   $('volup').addEventListener('click', () => nudgeVolume(1));
   $('queue').addEventListener('click', openQueue);
   $('library').addEventListener('click', openLibraryRoot);
-  $('back').addEventListener('click', () => history.back());
   $('more').addEventListener('click', () => {
     if (view.screen === 'lib') go({ ...view, page: (view.page || 0) + 1, focus: null });
   });
@@ -701,17 +738,18 @@ function wire() {
   });
 
   // Lists are one column, so sideways swipes are free: left steps back, right opens a folder.
-  $('items').addEventListener('keydown', (e) => {
-    const b = e.target.closest('button');
-    if (!b) return;
+  $('list').addEventListener('keydown', (e) => {
+    const b = e.target.closest && e.target.closest('#items button');
     if (e.key === 'ArrowLeft') {
       e.preventDefault();
       history.back();
-    } else if (e.key === 'ArrowRight' && b._open) {
+    } else if (e.key === 'ArrowRight' && b && b._open) {
       e.preventDefault();
       b._open();
     }
   });
+
+  document.addEventListener('focusin', (e) => { if (view.screen === 'now') showTip(e.target); });
 
   window.addEventListener('popstate', onPopState);
   document.addEventListener('keydown', (e) => {
