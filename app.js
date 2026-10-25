@@ -92,17 +92,23 @@ async function seal(obj) {
 }
 
 // ---- the link to the phone ----------------------------------------------------------------
-// Two free public MQTT brokers at once (EMQX and HiveMQ): no account, no daily cap, pushed both ways
-// in a tenth of a second, and either can be down without anything stopping. The phone keeps its
-// latest state retained there, so a reopened app shows it the moment it connects. Messages are
-// AES-GCM sealed here and on the phone; the brokers only carry ciphertext.
+// Two free public MQTT brokers at once (EMQX and HiveMQ), plus a spare on port 443: no account, no
+// daily cap, pushed both ways in a tenth of a second, and any one can be down without anything
+// stopping. The phone keeps its latest state retained there, so a reopened app shows it the moment
+// it connects. Messages are AES-GCM sealed here and on the phone; the brokers only carry ciphertext.
 
 const BROKERS = ['wss://broker.emqx.io:8084/mqtt', 'wss://broker.hivemq.com:8884/mqtt'];
+// shiftr.io's public instance on port 443, for networks that let only web traffic through. The phone
+// is always on it too; the glasses join it only when neither broker above connects within 5 s.
+const SPARE = { url: 'wss://public.cloud.shiftr.io', username: 'public', password: 'public' };
+const SPARE_AFTER = 5000;
 const OUTBOX_MAX_AGE = 60000;
 let links = [];
+let linkId = '';
+let spareTimer = 0;
 let linkDownSince = 0;    // when the page started waiting for a broker (0 while one is connected)
 let outbox = [];          // sealed presses waiting for a connection: { body, at, expects }
-const recent = [];        // the last messages handled (the same one arrives from both brokers)
+const recent = [];        // the last messages handled (the same one arrives from every broker)
 
 function linkUp() {
   return links.some((l) => l.connected);
@@ -110,7 +116,10 @@ function linkUp() {
 
 function linkChanged() {
   if (linkUp()) linkDownSince = 0;
-  else if (!linkDownSince) linkDownSince = Date.now();
+  else {
+    if (!linkDownSince) linkDownSince = Date.now();
+    if (links.length && !spareTimer && !links.some((l) => l.spare)) spareTimer = setTimeout(openSpare, SPARE_AFTER);
+  }
   $('stateText').textContent = stateLine();
 }
 
@@ -140,32 +149,44 @@ function openLink() {
     return;
   }
   linkDownSince = Date.now();
-  const id = Array.from(crypto.getRandomValues(new Uint8Array(6)), (b) => b.toString(16).padStart(2, '0')).join('');
-  for (const url of BROKERS) {
-    const client = mqtt.connect(url, {
-      clientId: `tgg-${id}-${links.length}`, clean: true, keepalive: 45, protocolVersion: 4,
-      reconnectPeriod: 1500, connectTimeout: 8000,
-    });
-    client.on('connect', () => {
-      client.subscribe([`bkr/${topic}/s`, `bkr/${topic}/snd`, `bkr/${topic}/lib`], { qos: 1 });
-      linkChanged();
-      flushOutbox();
-      // Sound settings carry no time, so after any (re)connect ask the phone for the current ones
-      // rather than trust a copy a broker kept.
-      if (APP_MODE === 'sound') askSound(true);
-    });
-    client.on('message', (t, payload) => handle(new TextDecoder().decode(payload)));
-    client.on('offline', linkChanged);
-    client.on('close', linkChanged);
-    client.on('error', () => { /* mqtt.js reconnects by itself */ });
-    links.push(client);
-  }
+  linkId = Array.from(crypto.getRandomValues(new Uint8Array(6)), (b) => b.toString(16).padStart(2, '0')).join('');
+  for (const url of BROKERS) addBroker(url);
+  spareTimer = setTimeout(openSpare, SPARE_AFTER);
+}
+
+function addBroker(url, extra = {}) {
+  const client = mqtt.connect(url, {
+    clientId: `tgg-${linkId}-${links.length}`, clean: true, keepalive: 45, protocolVersion: 4,
+    reconnectPeriod: 1500, connectTimeout: 8000, ...extra,
+  });
+  client.on('connect', () => {
+    client.subscribe([`bkr/${topic}/s`, `bkr/${topic}/snd`, `bkr/${topic}/lib`], { qos: 1 });
+    linkChanged();
+    flushOutbox();
+    // After any (re)connect, ask the phone for the current sound rather than trust a copy a
+    // broker kept.
+    if (APP_MODE === 'sound') askSound(true);
+  });
+  client.on('message', (t, payload) => handle(new TextDecoder().decode(payload)));
+  client.on('offline', linkChanged);
+  client.on('close', linkChanged);
+  client.on('error', () => { /* mqtt.js reconnects by itself */ });
+  links.push(client);
+  return client;
+}
+
+function openSpare() {
+  spareTimer = 0;
+  if (!links.length || linkUp() || links.some((l) => l.spare)) return;
+  addBroker(SPARE.url, { username: SPARE.username, password: SPARE.password }).spare = true;
 }
 
 function closeLink() {
   const old = links;
   links = [];
   linkDownSince = 0;
+  clearTimeout(spareTimer);
+  spareTimer = 0;
   for (const l of old) { try { l.end(true); } catch (e) { /* already closed */ } }
 }
 
@@ -212,6 +233,7 @@ async function handle(text) {
     if (state && m.at < state.at) return;
     prevState = state;
     state = m;
+    if (hasTrack()) startingSince = 0;
     if (volPreview != null && !volTimer) volPreview = null;
     renderNow();
     confirmAction();
@@ -286,7 +308,7 @@ function showToast(text) {
 // Each name says what the next press does.
 const TIPS = {
   prev: () => 'Previous song',
-  toggle: () => (state && state.play ? 'Pause' : 'Play'),
+  toggle: () => (state && state.play ? 'Pause' : (hasTrack() ? 'Play' : 'Start Tidal and play')),
   next: () => 'Next song',
   like: () => (state && state.liked ? 'Remove from My Collection' : 'Add to My Collection'),
   queue: () => 'Up next',
@@ -335,9 +357,15 @@ function stateLine() {
   if (typeof mqtt === 'undefined' && mqttTries >= 10 && !window.__testLink) return 'No link yet: press Back, then Refresh';
   if (!state) return lastHeard ? 'Waiting for your phone…' : 'Connecting to your phone…';
   if (linkDownSince && Date.now() - linkDownSince > 5000) return 'Reconnecting…';
+  if (startingSince && !hasTrack()) {
+    const t = Date.now() - startingSince;
+    if (t < 15000) return 'Starting Tidal…';
+    if (t < 40000) return "Tidal didn't start: open it on your phone once";
+    startingSince = 0;
+  }
   if (pendingSince && Date.now() - pendingSince > 7000) return 'Your phone is not answering';
   if (!state.acc) return 'Phone needs notification access';
-  if (!hasTrack()) return 'Tidal is idle';
+  if (!hasTrack()) return state.ses ? 'Tidal is idle' : 'Tidal is closed';
   if (state.buf) return 'Buffering…';
   return state.play ? 'Playing' : 'Paused';
 }
@@ -365,10 +393,13 @@ function renderNow() {
   }
   $('volText').textContent = volPreview != null ? String(volPreview) : (cur == null ? '' : String(cur));
 
-  $('title').textContent = track ? s.ti : (s && !s.acc ? 'Needs access' : (s ? 'Nothing playing' : 'Tidal Glass'));
+  // Tidal closed on the phone is not a dead end: Play starts it where it left off.
+  const closed = !!(s && s.acc && !s.ses);
+  $('title').textContent = track ? s.ti
+    : (s && !s.acc ? 'Needs access' : (closed ? 'Tidal is closed' : (s ? 'Nothing playing' : 'Tidal Glass')));
   $('artist').textContent = track ? (s.ar || '') : (s && !s.acc
     ? 'Open Tidal Glass on your phone and allow notification access.'
-    : 'Start something in Tidal, or pick from your library.');
+    : (closed ? 'Press Play to start it where you left off.' : 'Press Play, or pick something from your library.'));
   $('album').textContent = track ? (s.al || '') : '';
 
   const wrap = $('artwrap');
@@ -391,7 +422,7 @@ function renderNow() {
   const playing = !!(s && s.play);
   shown($('playIcon'), !playing);
   shown($('pauseIcon'), playing);
-  $('toggle').setAttribute('aria-label', playing ? 'Pause' : (track ? 'Play' : 'Resume Tidal'));
+  $('toggle').setAttribute('aria-label', playing ? 'Pause' : (track ? 'Play' : 'Start Tidal and play'));
 
   const liked = !!(s && s.liked);
   $('like').setAttribute('aria-pressed', liked ? 'true' : 'false');
@@ -461,8 +492,13 @@ function confirmAction() {
 
 let confirmTimer = 0;
 
+// Play pressed while Tidal was closed: when. The phone starts Tidal; the state line says so until a
+// song shows up, or says what to do if Tidal never starts.
+let startingSince = 0;
+
 function press(c, extra) {
   lastAction = c;
+  if (c === 'play' && !hasTrack()) startingSince = Date.now();
   send(c, extra);
   // Play and pause are safe to repeat: if Tidal has not changed after a moment (the phone was
   // reconnecting, a message was lost), send it once more instead of leaving the press unanswered.
@@ -472,6 +508,7 @@ function press(c, extra) {
     confirmTimer = setTimeout(() => {
       confirmTimer = 0;
       if (state && !!state.play === want) return;
+      if (want && startingSince) return; // the phone is still starting Tidal
       showToast(want ? 'Asking Tidal to play again…' : 'Asking Tidal to pause again…');
       send(c, extra);
     }, 2500);
@@ -711,6 +748,8 @@ function askSound(force) {
 }
 
 function receiveSound(m) {
+  // A broker that missed some updates can hand over an older copy on connect; keep the newest.
+  if (snd && m.at && snd.at && m.at < snd.at) return;
   const local = snd && snd.s;
   const keepLocal = local && !sndLoading && (sndTimer || Date.now() - sndEditAt < 3000);
   snd = m;

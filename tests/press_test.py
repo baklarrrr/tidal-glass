@@ -128,6 +128,22 @@ with sync_playwright() as p:
     }""", STATE)
     check("older state is ignored, newer state applies", titles == ["Test song", "Newer state"], json.dumps(titles))
 
+    # 9. Tidal closed on the phone: the screen says so, Play starts it, and no "play again" nagging.
+    reset()
+    page.evaluate("s => { state = {t: 'state', acc: true, ses: false, play: false, buf: false, pos: 0, at: Date.now(), vol: s.vol, q: [], qa: -1}; renderNow(); }", STATE)
+    closed_title = page.evaluate("[$('title').textContent, $('artist').textContent, $('stateText').textContent]")
+    page.focus("#toggle")
+    page.keyboard.press("Enter")
+    page.wait_for_timeout(3000)
+    c = commands()
+    starting = page.evaluate("[stateLine(), document.getElementById('toast').hidden]")
+    check("closed Tidal: says so, Play sends one play, shows 'Starting Tidal'",
+          closed_title[0] == "Tidal is closed" and "Press Play" in closed_title[1] and c == ["play"]
+          and starting[0] == "Starting Tidal…", json.dumps([closed_title, c, starting]))
+    page.evaluate("async s => { await handle(await seal({...s, at: Date.now() + 1000, play: true})); }", STATE)
+    after = page.evaluate("[stateLine(), startingSince]")
+    check("once Tidal is up, the screen shows the song", after == ["Playing", 0], json.dumps(after))
+
     # 8. The old link's daily-limit message is gone for good.
     source = page.evaluate("fetch('app.js').then(r => r.text())")
     check("no daily-limit message left", "busy for today" not in source and "ntfy.sh" not in source)
