@@ -144,6 +144,18 @@ with sync_playwright() as p:
     after = page.evaluate("[stateLine(), startingSince]")
     check("once Tidal is up, the screen shows the song", after == ["Playing", 0], json.dumps(after))
 
+    # 10. Calm: after 15 s untouched the page dims; the first pinch wakes it AND still presses.
+    reset()
+    page.evaluate("s => { state = {...s, play: true, at: Date.now()}; renderNow(); }", STATE)
+    page.focus("#toggle")
+    page.evaluate("lastInputAt = Date.now() - 20000; checkCalm();")
+    calm = page.evaluate("document.body.classList.contains('calm')")
+    page.keyboard.press("Enter")
+    page.wait_for_timeout(500)
+    woke = page.evaluate("document.body.classList.contains('calm')")
+    c = commands()
+    check("calm after 15 s; a pinch wakes it and still pauses", calm and not woke and c == ["pause"], json.dumps([calm, woke, c]))
+
     # 8. The old link's daily-limit message is gone for good.
     source = page.evaluate("fetch('app.js').then(r => r.text())")
     check("no daily-limit message left", "busy for today" not in source and "ntfy.sh" not in source)

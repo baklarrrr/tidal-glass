@@ -466,6 +466,21 @@ function tick() {
   seek.setAttribute('aria-valuetext', `${clock(p)} of ${clock(state.dur)}`);
 }
 
+// ---- calm: less light while nobody is touching it ------------------------------------------
+// After CALM_AFTER without a swipe or pinch on Now Playing the page dims its art and controls (see
+// style.css); the first input wakes it at once and is handled as usual.
+const CALM_AFTER = 15000;
+let lastInputAt = Date.now();
+
+function wakeUp() {
+  lastInputAt = Date.now();
+  document.body.classList.remove('calm');
+}
+
+function checkCalm() {
+  document.body.classList.toggle('calm', view.screen === 'now' && Date.now() - lastInputAt > CALM_AFTER);
+}
+
 function startTick() {
   stopTick();
   tickTimer = setInterval(() => {
@@ -473,6 +488,7 @@ function startTick() {
     if (view.screen === 'now' && state && state.play) tick();
     $('stateText').textContent = stateLine();
     if (view.screen === 'sound') renderSoundStatus();
+    checkCalm();
   }, 1000);
 }
 
@@ -1225,6 +1241,9 @@ function registerServiceWorker() {
 // ---- wiring ------------------------------------------------------------------------------
 
 function wire() {
+  // Any swipe or pinch wakes the page from calm before anything else handles it.
+  document.addEventListener('keydown', wakeUp, true);
+  document.addEventListener('pointerdown', wakeUp, true);
   $('toggle').addEventListener('click', () => press(state && state.play ? 'pause' : 'play'));
   $('prev').addEventListener('click', () => press('prev'));
   $('next').addEventListener('click', () => press('next'));

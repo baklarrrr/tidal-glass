@@ -226,7 +226,19 @@ button:active { transform: scale(0.94); }
   color: var(--ink); font-size: 17px; background: rgba(47, 216, 236, 0.14);
 }
 
+/* ---- calm: less light while nobody is touching it ------------------------------------------
+   After 15 s without a swipe or pinch on Now Playing, the art, controls and secondary text dim and the
+   focus glow rests, so the display puts out less light. Title and artist stay as they are; the first
+   swipe or pinch restores everything at once (and still does what it was meant to do). */
+body.calm .artwrap img { opacity: 0.5; }
+body.calm .album, body.calm .topline, body.calm .seek .times { opacity: 0.6; }
+body.calm .row button, body.calm .row.main .primary { border-color: rgba(255, 255, 255, 0.16); color: var(--dim); }
+body.calm button:focus, body.calm .row.main .primary:focus { background: transparent; border-color: rgba(47, 216, 236, 0.45); box-shadow: none; }
+body.calm .seek .fill { background: var(--dim); }
+
 @media (prefers-reduced-motion: no-preference) {
   button, .seek { transition: box-shadow 140ms ease, background-color 140ms ease, border-color 140ms ease, transform 90ms ease; }
   .tip { transition: opacity 180ms ease; }
+  /* Easing into calm is slow so it never draws the eye; waking is instant (no transition back). */
+  body.calm .artwrap img, body.calm .album, body.calm .topline, body.calm .seek .times { transition: opacity 900ms ease; }
 }
