@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "name": "Tidal Glass",
+  "description": "Tidal now playing and controls, linked to the Tidal Glass app on your phone.",
+  "appearance": {
+    "theme_color": "#2FD8EC",
+    "icon_background": {
+      "colors": ["#0F5A6C", "#04161C"],
+      "stops": [0.0, 1.0],
+      "inner_glow_color": "#7DF3FF"
+    },
+    "icon": {
+      "src": "../icon-mono.svg",
+      "type": "monochrome"
+    }
+  }
+}
