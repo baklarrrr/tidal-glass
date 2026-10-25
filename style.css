@@ -199,7 +199,7 @@ button:active { transform: scale(0.94); }
 .bcol .bt .fill { position: absolute; inset-inline: 0; border-radius: 3px; background: var(--ink); }
 .bcol .bt .knob { position: absolute; inset-inline-start: 50%; inline-size: 18px; block-size: 18px; margin: -9px 0 0 -9px; border-radius: 50%; background: var(--ink); }
 .bcol .bf { font-size: 14px; color: var(--soft); font-variant-numeric: tabular-nums; }
-.bcol .bo { font-size: 11px; color: var(--accent); min-block-size: 14px; white-space: nowrap; }
+.bcol .bo { font-size: 14px; font-weight: 700; color: var(--accent); min-block-size: 17px; white-space: nowrap; }
 .bcol:focus { border-color: var(--accent); background: var(--accent-soft); box-shadow: var(--glow); }
 .bcol:focus .fill, .bcol:focus .knob { background: var(--accent); }
 

@@ -803,8 +803,7 @@ function buildSound() {
     if (!snd) return;
     snd.s.on = !snd.s.on;
     soundChanged();
-    flushSound(); // on/off is for comparing, so it goes at once
-    showToast(snd.s.on ? 'Sound Lab on' : 'Off: Tidal plays as it normally does');
+    flushSound(); // on/off is for comparing, so it goes at once; the button and status say which
   });
 
   const freqs = $('freqs');
@@ -972,7 +971,7 @@ function renderBands() {
     const shown = Math.round(g);
     col.querySelector('.bv').textContent = `${shown > 0 ? '+' : ''}${shown}`;
     const own = snd.s.bands[i] || 0;
-    col.querySelector('.bo').textContent = own ? `tuned ${own > 0 ? '+' : ''}${own}` : '';
+    col.querySelector('.bo').textContent = own ? `${own > 0 ? '+' : ''}${own}` : '';
     col.setAttribute('aria-valuenow', String(shown));
     col.setAttribute('aria-valuetext', `${signedDb(shown)}${own ? `, tuned ${signedDb(own)}` : ''}`);
   });
