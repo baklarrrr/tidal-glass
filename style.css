@@ -189,12 +189,14 @@ button:active { transform: scale(0.94); }
 .sound.waiting .curvebox, .sound.waiting .sndtools, .sound.waiting .sndrows { display: none; }
 .sound.waiting .sndempty { display: flex; }
 
-/* The actions: one swipe up from Preset. */
-.sndtools { flex: none; display: flex; gap: 6px; }
+/* The actions: one swipe up from Preset. A wider font than expected steps the labels down a size
+   (app.js, fitTools) and only past 14 px ends them in "…"; they never wrap or run off the screen. */
+.sndtools { flex: none; display: flex; gap: 6px; font-size: 17px; }
 .sndtools .pill-btn {
-  flex: 1 1 auto; justify-content: center; block-size: 48px; padding: 0 10px; border-radius: 14px;
-  font-size: 17px; font-weight: 600; white-space: nowrap;
+  flex: 1 1 auto; min-inline-size: 0; justify-content: center; block-size: 48px; padding: 0 10px; border-radius: 14px;
+  font-size: inherit; font-weight: 600; white-space: nowrap;
 }
+.sndtools .pill-btn span { min-inline-size: 0; overflow: hidden; text-overflow: ellipsis; }
 .sndtools .power { flex: none; gap: 7px; padding: 0 12px 0 10px; }
 /* The switch: cyan and to the right when Sound Lab is shaping Tidal, a grey outline when it is off. */
 .switch { inline-size: 30px; block-size: 18px; flex: none; }

@@ -1210,9 +1210,22 @@ function openSound() {
 // there are no controls, so the heading holds focus until the sound arrives (receiveSound moves it on).
 function focusSound(id) {
   if (!snd) { $('soundTitle').focus({ preventScroll: true }); return; }
+  fitTools();
   const target = (id && $(id)) || $('srow-preset');
   target.focus({ preventScroll: true });
   if (target.classList.contains('srow')) reveal(target);
+}
+
+// The five actions share one row, measured with the PC's font. If the glasses' font is wider, the
+// labels step down a size at a time (to 14 px at the least) rather than being cut.
+function fitTools() {
+  const bar = document.querySelector('.sndtools');
+  if (!bar.offsetWidth) return;
+  const cut = () => [...bar.querySelectorAll('span')].some((s) => s.scrollWidth > s.clientWidth + 0.5);
+  for (let px = 17; px >= 14; px--) {
+    bar.style.fontSize = `${px}px`;
+    if (!cut()) return;
+  }
 }
 
 // Sound Lab says things in its own header line, never in a message over the controls (on the
@@ -1630,6 +1643,8 @@ async function main() {
     registerVoiceTools();
   }
   watchBrowserBattery();
+  // A late web font can change label widths after the first fit.
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => { if (view.screen === 'sound') fitTools(); });
   registerServiceWorker();
   if (document.visibilityState === 'visible') { openLink(); sayHello(); startTick(); }
 }
