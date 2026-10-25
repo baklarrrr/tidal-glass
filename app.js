@@ -14,6 +14,7 @@ let waitingSince = 0;
 let listMode = null; // null | 'queue' | 'lib'
 let libStack = [];
 let libCurrent = null;
+let lastHello = 0;
 
 // ---- pairing and crypto ------------------------------------------------------------------
 
@@ -108,7 +109,11 @@ async function connect() {
     } catch (err) { /* keepalive or unrelated */ }
   };
   es.addEventListener('message', onEvent);
-  es.addEventListener('open', () => { failures = 0; send('hello'); });
+  es.addEventListener('open', () => {
+    failures = 0;
+    // One hello per connection is enough; the browser can fire 'open' twice in quick succession.
+    if (Date.now() - lastHello > 20000) { lastHello = Date.now(); send('hello'); }
+  });
   es.onerror = () => {
     if (!state) $('status').textContent = 'Reconnecting…';
     // If the live stream keeps failing on this device, fall back to asking every few seconds.
