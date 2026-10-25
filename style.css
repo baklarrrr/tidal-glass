@@ -52,6 +52,10 @@ svg { fill: currentColor; }
 }
 .badge.square { padding: 2px 5px; }
 .vol { display: inline-flex; align-items: center; gap: 4px; }
+.gbat { display: inline-flex; align-items: center; gap: 4px; font-variant-numeric: tabular-nums; }
+.gbat svg { inline-size: 18px; block-size: 18px; }
+.gbat.low { color: #ffb08a; }
+.gbat.charging { color: var(--accent); }
 .vol svg { inline-size: 15px; block-size: 15px; }
 
 /* ---- track ------------------------------------------------------------------------------- */

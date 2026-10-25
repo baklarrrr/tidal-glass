@@ -138,7 +138,11 @@ function sayHello() {
   if (APP_MODE === 'sound') { askSound(); return; }
   if (Date.now() - lastHello < 15000) return;
   lastHello = Date.now();
-  send('hello');
+  // Whether this browser can read the glasses' own battery (tells the phone app's log; no UI use yet).
+  const probe = navigator.getBattery
+    ? navigator.getBattery().then((b) => ({ nb: Math.round(b.level * 100), nc: b.charging })).catch(() => ({ nb: -2 }))
+    : Promise.resolve({ nb: -1 });
+  probe.then((extra) => send('hello', extra));
 }
 
 async function catchUp() {
@@ -303,6 +307,17 @@ function renderNow() {
   $('explicit').hidden = !(track && s.ex);
   const { cur } = volParts();
   $('vol').hidden = cur == null;
+  // Glasses battery, as Meta's toolkit reports it to the phone (5% steps).
+  const gb = s && Number.isFinite(s.gb) ? s.gb : null;
+  const bat = $('gbat');
+  bat.hidden = gb == null;
+  if (gb != null) {
+    $('gbatText').textContent = `${gb}%`;
+    $('gbatFill').setAttribute('width', String(Math.max(1, 13.4 * gb / 100)));
+    bat.classList.toggle('charging', !!s.gc);
+    bat.classList.toggle('low', !s.gc && gb <= 15);
+    bat.setAttribute('aria-label', `Glasses battery ${gb}%${s.gc ? ', charging' : ''}`);
+  }
   $('volText').textContent = volPreview != null ? String(volPreview) : (cur == null ? '' : String(cur));
 
   $('title').textContent = track ? s.ti : (s && !s.acc ? 'Needs access' : (s ? 'Nothing playing' : 'Tidal Glass'));
