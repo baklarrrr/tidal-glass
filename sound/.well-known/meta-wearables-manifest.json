@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "name": "Sound Lab",
+  "description": "Equaliser, tone, loudness and balance for Tidal on your glasses' speakers, linked to the Tidal Glass app on your phone.",
+  "appearance": {
+    "theme_color": "#FFB547",
+    "icon_background": {
+      "colors": ["#7A4A10", "#1A0F03"],
+      "stops": [0.0, 1.0],
+      "inner_glow_color": "#FFD592"
+    },
+    "icon": {
+      "src": "../icon-mono.svg",
+      "type": "monochrome"
+    }
+  }
+}

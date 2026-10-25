@@ -147,6 +147,73 @@ button:active { transform: scale(0.94); }
 .listnav:not(:has(button:not([hidden]))) { display: none; }
 #listTitle:focus { outline: none; }
 
+/* ---- Sound Lab -------------------------------------------------------------------------- */
+.screen.sound { gap: 10px; padding: 20px 30px 18px; }
+.soundhead { display: flex; align-items: center; gap: 14px; min-block-size: 44px; flex: none; }
+.soundhead h2 { font-size: 26px; flex: none; -webkit-line-clamp: 1; }
+.soundhead .state { font-size: 15px; color: var(--dim); }
+.soundhead .hint { justify-content: flex-end; }
+.power { block-size: 44px; font-size: 17px; padding: 0 20px; flex: none; }
+.power[aria-pressed="true"] { color: var(--accent); border-color: rgba(47, 216, 236, 0.7); }
+.sound.off .curvebox, .sound.off .srow, .sound.waiting .curvebox, .sound.waiting .srow { opacity: 0.45; }
+
+.curvebox { flex: none; }
+.curve { display: block; inline-size: 100%; block-size: 112px; overflow: visible; }
+.curve .zero { stroke: var(--hair); stroke-width: 1; stroke-dasharray: 3 6; }
+.curve-line { fill: none; stroke: var(--accent); stroke-width: 3; stroke-linejoin: round; stroke-linecap: round; }
+.curve-fill { fill: rgba(47, 216, 236, 0.12); }
+.curve circle { fill: var(--soft); }
+.curve circle.hot { fill: var(--accent); }
+.freqs { position: relative; block-size: 16px; margin-top: 2px; font-size: 12px; color: var(--dim); font-variant-numeric: tabular-nums; }
+.freqs span { position: absolute; transform: translateX(-50%); }
+
+.sndrows { display: flex; flex-direction: column; gap: 8px; min-block-size: 0; overflow: auto; scrollbar-width: none; padding: 3px 4px 6px; }
+.sndrows::-webkit-scrollbar { display: none; }
+.srow {
+  flex: none; display: grid; grid-template-columns: 112px minmax(0, 1fr) 96px; align-items: center; gap: 16px;
+  min-block-size: 54px; padding: 0 16px; border: 1.5px solid var(--hair); border-radius: 16px; outline: none;
+}
+.srow .lab { font-size: 20px; }
+.srow .val { font-size: 19px; font-weight: 700; text-align: end; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.srow .track { position: relative; block-size: 4px; border-radius: 2px; background: rgba(255, 255, 255, 0.24); }
+.srow .track .mid { position: absolute; inset-block: -7px; inset-inline-start: 50%; inline-size: 2px; margin-inline-start: -1px; background: var(--hair); }
+.srow .track .fill { position: absolute; inset-block: 0; border-radius: 2px; background: var(--ink); }
+.srow .track .knob { position: absolute; inset-block-start: 50%; inline-size: 14px; block-size: 14px; margin: -7px 0 0 -7px; border-radius: 50%; background: var(--ink); }
+.srow.preset .pval { grid-column: 2 / 4; display: flex; justify-content: space-between; align-items: center; font-size: 21px; font-weight: 700; }
+.srow.preset .arrow { color: var(--dim); font-size: 26px; line-height: 1; padding: 0 4px; }
+.srow:focus { border-color: var(--accent); background: var(--accent-soft); box-shadow: var(--glow); }
+.srow:focus .fill, .srow:focus .knob { background: var(--accent); }
+.srow:focus .knob { box-shadow: 0 0 10px var(--accent); }
+.srow:focus .arrow { color: var(--accent); }
+.sndacts { flex: none; display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.sndacts .pill-btn { justify-content: center; inline-size: 100%; border-radius: 16px; block-size: 54px; font-size: 19px; padding: 0 12px; }
+
+.bandcols { flex: 1; display: grid; grid-template-columns: repeat(10, minmax(0, 1fr)); gap: 4px; min-block-size: 0; padding: 4px 2px 2px; }
+.bcol {
+  display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 10px 0 8px;
+  border: 1.5px solid transparent; border-radius: 14px; outline: none; min-block-size: 0;
+}
+.bcol .bv { font-size: 17px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.bcol .bt { position: relative; flex: 1; inline-size: 6px; border-radius: 3px; background: rgba(255, 255, 255, 0.2); }
+.bcol .bt .mid { position: absolute; inset-inline: -9px; inset-block-start: 50%; block-size: 2px; margin-block-start: -1px; background: var(--hair); }
+.bcol .bt .fill { position: absolute; inset-inline: 0; border-radius: 3px; background: var(--ink); }
+.bcol .bt .knob { position: absolute; inset-inline-start: 50%; inline-size: 18px; block-size: 18px; margin: -9px 0 0 -9px; border-radius: 50%; background: var(--ink); }
+.bcol .bf { font-size: 14px; color: var(--soft); font-variant-numeric: tabular-nums; }
+.bcol .bo { font-size: 11px; color: var(--accent); min-block-size: 14px; white-space: nowrap; }
+.bcol:focus { border-color: var(--accent); background: var(--accent-soft); box-shadow: var(--glow); }
+.bcol:focus .fill, .bcol:focus .knob { background: var(--accent); }
+
+.slotlist { list-style: none; margin: 0; padding: 4px; display: flex; flex-direction: column; gap: 12px; }
+.slot {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 10px;
+  padding: 10px 12px 10px 18px; border: 1.5px solid var(--hair); border-radius: 18px;
+}
+.stext { min-inline-size: 0; display: flex; flex-direction: column; gap: 2px; }
+.slot .sn { font-size: 21px; font-weight: 700; }
+.slot .sd { font-size: 15px; color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.slot .pill-btn { block-size: 50px; font-size: 18px; padding: 0 18px; }
+.slot .pill-btn[disabled] { opacity: 0.35; }
+
 /* ---- setup ------------------------------------------------------------------------------ */
 .hero { inline-size: 72px; block-size: 72px; color: var(--accent); margin-bottom: 8px; }
 

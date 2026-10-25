@@ -67,6 +67,9 @@
         <button id="library" class="round" aria-label="Library">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h3.2v16H4zm5.2 0h3.2v16H9.2zm5.3 1 3-.8 3.9 15.1-3 .8z"/></svg>
         </button>
+        <button id="soundBtn" class="round" aria-label="Sound Lab">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5.2 3h1.6v18H5.2zm6 0h1.6v18h-1.6zm6 0h1.6v18h-1.6z" opacity=".6"/><circle cx="6" cy="15.5" r="2.7"/><circle cx="12" cy="8" r="2.7"/><circle cx="18" cy="12.5" r="2.7"/></svg>
+        </button>
         <button id="voldown" class="round" aria-label="Volume down">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 9h4l5-4v14l-5-4H3zm12.5 2h6v2h-6z"/></svg>
         </button>
@@ -90,6 +93,42 @@
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
         </button>
       </div>
+    </section>
+
+    <!-- Sound Lab: shapes Tidal's audio on the phone before it reaches the glasses' speakers.
+         Swipe up/down to pick a control, left/right to change it; everything is heard live. -->
+    <section id="sound" class="screen sound" aria-labelledby="soundTitle" hidden>
+      <header class="soundhead">
+        <h2 id="soundTitle">Sound Lab</h2>
+        <span class="state"><span id="sndDot" class="dot" aria-hidden="true"></span><span id="sndStateText">Asking your phone…</span></span>
+        <button id="sndPower" class="pill-btn power" aria-pressed="true"><span>On</span></button>
+      </header>
+      <div class="curvebox" aria-hidden="true">
+        <svg id="curve" class="curve" viewBox="0 0 540 112">
+          <line class="zero" x1="0" y1="56" x2="540" y2="56"/>
+          <path id="curveFill" class="curve-fill" d=""/>
+          <path id="curveLine" class="curve-line" d=""/>
+          <g id="curveDots"></g>
+        </svg>
+        <div id="freqs" class="freqs"></div>
+      </div>
+      <div id="sndRows" class="sndrows"></div>
+    </section>
+
+    <section id="bands" class="screen sound" aria-labelledby="bandsTitle" hidden>
+      <header class="soundhead">
+        <h2 id="bandsTitle">Fine-tune</h2>
+        <span class="state hint">Swipe up or down to change a band</span>
+      </header>
+      <div id="bandCols" class="bandcols"></div>
+    </section>
+
+    <section id="slots" class="screen sound" aria-labelledby="slotsTitle" hidden>
+      <header class="soundhead">
+        <h2 id="slotsTitle">My sounds</h2>
+        <span class="state hint">Saved on your phone</span>
+      </header>
+      <ol id="slotList" class="slotlist"></ol>
     </section>
 
     <section id="setup" class="screen center" hidden>

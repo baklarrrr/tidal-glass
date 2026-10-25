@@ -16,6 +16,12 @@ const SERVER = 'https://ntfy.sh';
 const HISTORY_LIMIT = 4;   // the glasses keep at most five history entries including the first page
 const $ = (id) => document.getElementById(id);
 
+// The same page is also the Sound Lab app (opened from ./sound/), which starts on its Sound screen.
+const APP_MODE = new URLSearchParams(location.search).get('app') === 'sound' ? 'sound' : 'tidal';
+const ROOT = APP_MODE === 'sound' ? { screen: 'sound' } : { screen: 'now' };
+// Presses that Tidal answers with a fresh state; anything else must not raise "not answering".
+const EXPECTS_REPLY = new Set(['toggle', 'play', 'pause', 'next', 'prev', 'like', 'volUp', 'volDown', 'volSet', 'skip', 'seek', 'seekBy', 'lib', 'libplay']);
+
 let topic = null;
 let key = null;
 let state = null;
@@ -93,7 +99,7 @@ async function send(c, extra = {}) {
     const body = await seal({ c, ts: Date.now(), ...extra });
     const r = await fetch(`${SERVER}/${topic}-c`, { method: 'POST', body });
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    if (c !== 'hello') pendingSince = Date.now();
+    if (EXPECTS_REPLY.has(c)) pendingSince = Date.now();
     return true;
   } catch (e) {
     showToast('No connection. Check your phone has internet.');
@@ -119,10 +125,13 @@ async function handle(text) {
   } else if (m.t === 'lib') {
     libCache.set(`${m.id}|${m.page}`, { at: Date.now(), m });
     if (view.screen === 'lib' && view.id === m.id && view.page === m.page) renderLibrary(m, true);
+  } else if (m.t === 'snd') {
+    receiveSound(m);
   }
 }
 
 function sayHello() {
+  if (APP_MODE === 'sound') { askSound(); return; }
   if (Date.now() - lastHello < 15000) return;
   lastHello = Date.now();
   send('hello');
@@ -233,6 +242,7 @@ const TIPS = {
   library: () => 'Your Tidal library',
   voldown: () => 'Volume down',
   volup: () => 'Volume up',
+  soundBtn: () => 'Sound Lab: equaliser and speakers',
   seek: () => 'Swipe left or right to skip',
 };
 let tipFor = null;
@@ -367,6 +377,7 @@ function startTick() {
     // Only the clock moves; when paused or idle there is nothing to redraw.
     if (view.screen === 'now' && state && state.play) tick();
     $('stateText').textContent = stateLine();
+    if (view.screen === 'sound') renderSoundStatus();
   }, 1000);
 }
 
@@ -468,20 +479,29 @@ function go(next) {
 }
 
 function render(next) {
-  view = next || { screen: 'now' };
-  const onNow = view.screen === 'now';
-  $('now').hidden = !onNow;
-  $('list').hidden = onNow;
-  if (onNow) {
+  view = next || ROOT;
+  const sc = view.screen;
+  $('now').hidden = sc !== 'now';
+  $('list').hidden = sc !== 'queue' && sc !== 'lib';
+  $('sound').hidden = sc !== 'sound';
+  $('bands').hidden = sc !== 'bands';
+  $('slots').hidden = sc !== 'slots';
+  if (sc === 'now') {
     renderNow();
     // Coming back from a list lands on the button that opened it.
     const target = view.focus && $(view.focus);
     if (target && !target.hidden) target.focus();
     else focusDefault();
-  } else if (view.screen === 'queue') {
+  } else if (sc === 'queue') {
     renderQueue(true);
-  } else if (view.screen === 'lib') {
+  } else if (sc === 'lib') {
     openLibraryView();
+  } else if (sc === 'sound') {
+    openSound();
+  } else if (sc === 'bands') {
+    openBands();
+  } else if (sc === 'slots') {
+    openSlots();
   }
 }
 
@@ -598,13 +618,410 @@ function leaveToNow() {
     depth = 0;
     history.go(-steps);
   } else {
-    render({ screen: 'now' });
+    render(ROOT);
   }
 }
 
 function onPopState(e) {
   depth = Math.max(0, depth - 1);
-  render(e.state || { screen: 'now' });
+  render(e.state || ROOT);
+}
+
+// ---- Sound Lab ---------------------------------------------------------------------------
+// The phone applies the sound to Tidal; this page owns the controls. Adjustments are drawn at once
+// and sent as one message per burst of swipes, so a whole tuning session costs a few messages.
+
+let snd = null;           // the phone's last Sound Lab message; local edits are applied to snd.s
+let sndAt = 0;            // when it arrived
+let sndAsked = 0;         // when we last asked for it
+let sndEditAt = 0;        // last local adjustment, so an older copy from the phone never undoes it
+let sndTimer = 0;
+let sndLoading = 0;       // slot number being loaded
+const armed = new Map();  // confirm-twice buttons: id -> timer
+
+const SLIDERS = [
+  { k: 'bass', label: 'Bass', min: -12, max: 12, db: true },
+  { k: 'mids', label: 'Mids', min: -12, max: 12, db: true },
+  { k: 'treble', label: 'Treble', min: -12, max: 12, db: true },
+  { k: 'clarity', label: 'Clarity', min: 0, max: 10 },
+  { k: 'loud', label: 'Loudness', min: 0, max: 10 },
+  { k: 'bal', label: 'Balance', min: -10, max: 10 },
+];
+const BAND_COUNT = 10;
+const DB_RANGE = 15;
+
+function askSound(force) {
+  if (!force && snd && Date.now() - sndAt < 10 * 60 * 1000) return;
+  if (Date.now() - sndAsked < 5000) return;
+  sndAsked = Date.now();
+  send('snd');
+}
+
+function receiveSound(m) {
+  const local = snd && snd.s;
+  const keepLocal = local && !sndLoading && (sndTimer || Date.now() - sndEditAt < 3000);
+  snd = m;
+  sndAt = Date.now();
+  if (keepLocal) snd.s = local;
+  if (!Array.isArray(snd.s.bands)) snd.s.bands = Array(BAND_COUNT).fill(0);
+  if (sndLoading) {
+    showToast(`Sound ${sndLoading} loaded`);
+    sndLoading = 0;
+    if (view.screen === 'slots') history.back();
+  }
+  if (view.screen === 'sound') renderSound();
+  else if (view.screen === 'bands') renderBands();
+  else if (view.screen === 'slots') renderSlots(true);
+}
+
+// What you hear per band: preset + tone controls + fine-tune, as the phone computes it.
+function soundCurve(s) {
+  const base = (snd.presets && (snd.presets[s.preset] || snd.presets.Flat)) || Array(BAND_COUNT).fill(0);
+  const w = snd.w || {};
+  const wt = (k, i) => (w[k] ? w[k][i] || 0 : 0);
+  return base.map((b, i) => {
+    const g = b + s.bass * wt('bass', i) + s.mids * wt('mids', i) + s.treble * wt('treble', i)
+      + s.clarity * wt('clarity', i) + (s.bands[i] || 0);
+    return Math.max(-DB_RANGE, Math.min(DB_RANGE, g));
+  });
+}
+
+function signedDb(v) {
+  return `${v > 0 ? '+' : ''}${v} dB`;
+}
+
+function sliderText(c, v) {
+  if (c.k === 'bal') return v === 0 ? 'Centre' : `${v < 0 ? 'Left' : 'Right'} ${Math.abs(v)}`;
+  return c.db ? signedDb(v) : String(v);
+}
+
+function soundChanged() {
+  sndEditAt = Date.now();
+  if (view.screen === 'bands') renderBands(); else renderSound();
+  clearTimeout(sndTimer);
+  // One message per pause in swiping; the phone and glasses share ntfy.sh's daily allowance.
+  sndTimer = setTimeout(flushSound, 700);
+}
+
+function dropPendingSound() {
+  clearTimeout(sndTimer);
+  sndTimer = 0;
+}
+
+function flushSound() {
+  if (!sndTimer) return;
+  clearTimeout(sndTimer);
+  sndTimer = 0;
+  send('sndSet', { s: snd.s });
+}
+
+// Destructive buttons ask for a second pinch within three seconds.
+function confirmTwice(btn, prompt, action) {
+  const label = btn.querySelector('span') || btn;
+  if (armed.has(btn.id)) {
+    clearTimeout(armed.get(btn.id));
+    armed.delete(btn.id);
+    label.textContent = btn.dataset.label;
+    action();
+    return;
+  }
+  btn.dataset.label = btn.dataset.label || label.textContent;
+  label.textContent = prompt;
+  armed.set(btn.id, setTimeout(() => {
+    armed.delete(btn.id);
+    label.textContent = btn.dataset.label;
+  }, 3000));
+}
+
+// ---- Sound screen
+
+function buildSound() {
+  const box = $('sndRows');
+  box.textContent = '';
+  const preset = document.createElement('div');
+  preset.className = 'srow preset';
+  preset.id = 'srow-preset';
+  preset.tabIndex = 0;
+  preset.setAttribute('role', 'slider');
+  preset.setAttribute('aria-label', 'Preset. Swipe left or right to change.');
+  preset.innerHTML = '<span class="lab">Preset</span><span class="pval"><span class="arrow" aria-hidden="true">‹</span><span class="pname"></span><span class="arrow" aria-hidden="true">›</span></span>';
+  box.appendChild(preset);
+  for (const c of SLIDERS) {
+    const row = document.createElement('div');
+    row.className = 'srow';
+    row.id = `srow-${c.k}`;
+    row.dataset.k = c.k;
+    row.tabIndex = 0;
+    row.setAttribute('role', 'slider');
+    row.setAttribute('aria-label', `${c.label}. Swipe left or right to change.`);
+    row.setAttribute('aria-valuemin', String(c.min));
+    row.setAttribute('aria-valuemax', String(c.max));
+    row.innerHTML = `<span class="lab">${c.label}</span><span class="track"><span class="mid"></span><span class="fill"></span><span class="knob"></span></span><span class="val"></span>`;
+    if (c.min >= 0) row.querySelector('.mid').hidden = true;
+    box.appendChild(row);
+  }
+  const acts = document.createElement('div');
+  acts.className = 'sndacts';
+  acts.innerHTML = '<button id="sndFine" class="pill-btn"><span>Fine-tune</span></button>'
+    + '<button id="sndSlots" class="pill-btn"><span>My sounds</span></button>'
+    + '<button id="sndTest" class="pill-btn"><span>Test speakers</span></button>'
+    + '<button id="sndReset" class="pill-btn"><span>Reset to flat</span></button>';
+  box.appendChild(acts);
+
+  box.addEventListener('keydown', (e) => {
+    const row = e.target.closest && e.target.closest('.srow');
+    if (!row || !snd) return;
+    if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+      e.preventDefault();
+      e.stopPropagation();
+      const dir = e.key === 'ArrowRight' ? 1 : -1;
+      if (row.id === 'srow-preset') stepPreset(dir);
+      else stepSlider(row.dataset.k, dir);
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      if (row.id === 'srow-preset') stepPreset(1);
+      else showToast('Swipe left or right to change it');
+    }
+  });
+  preset.addEventListener('click', (e) => { if (e.detail && snd) stepPreset(1); });
+
+  $('sndFine').addEventListener('click', () => { if (snd) openSub('bands', 'sndFine'); });
+  $('sndSlots').addEventListener('click', () => { if (snd) openSub('slots', 'sndSlots'); });
+  $('sndTest').addEventListener('click', () => {
+    send('sndTest', { side: 'lr' });
+    showToast('Left speaker, then right');
+  });
+  $('sndReset').addEventListener('click', () => {
+    if (!snd) return;
+    confirmTwice($('sndReset'), 'Pinch again to reset', () => {
+      Object.assign(snd.s, { preset: 'Flat', bass: 0, mids: 0, treble: 0, clarity: 0, loud: 0, bal: 0, bands: Array(BAND_COUNT).fill(0) });
+      soundChanged();
+      showToast('Back to flat');
+    });
+  });
+  $('sndPower').addEventListener('click', () => {
+    if (!snd) return;
+    snd.s.on = !snd.s.on;
+    soundChanged();
+    flushSound(); // on/off is for comparing, so it goes at once
+    showToast(snd.s.on ? 'Sound Lab on' : 'Off: Tidal plays as it normally does');
+  });
+
+  const freqs = $('freqs');
+  freqs.textContent = '';
+  ['32', '64', '125', '250', '500', '1k', '2k', '4k', '8k', '16k'].forEach((f, i) => {
+    const span = document.createElement('span');
+    span.textContent = f;
+    span.style.insetInlineStart = `${(curveX(i) / 540) * 100}%`;
+    freqs.appendChild(span);
+  });
+}
+
+function stepSlider(k, dir) {
+  const c = SLIDERS.find((x) => x.k === k);
+  const next = Math.max(c.min, Math.min(c.max, (snd.s[k] || 0) + dir));
+  if (next === snd.s[k]) return;
+  snd.s[k] = next;
+  soundChanged();
+}
+
+function stepPreset(dir) {
+  const names = Object.keys(snd.presets || {});
+  if (!names.length) return;
+  const i = (names.indexOf(snd.s.preset) + dir + names.length) % names.length;
+  snd.s.preset = names[i];
+  soundChanged();
+}
+
+function openSub(screen, from) {
+  history.replaceState({ ...view, focus: from }, '');
+  go({ screen });
+}
+
+function openSound() {
+  askSound();
+  renderSound();
+  const target = (view.focus && $(view.focus)) || $('srow-preset');
+  target.focus();
+}
+
+function renderSoundStatus() {
+  let text;
+  let live = false;
+  if (!snd) text = sndAsked && Date.now() - sndAsked > 7000 ? 'Your phone is not answering' : 'Asking your phone…';
+  else if (!snd.s.on) text = 'Off · Tidal plays as normal';
+  else { text = snd.status || ''; live = !!snd.active; }
+  $('sndStateText').textContent = text;
+  $('sndDot').classList.toggle('live', live);
+}
+
+function renderSound() {
+  renderSoundStatus();
+  const sec = $('sound');
+  sec.classList.toggle('waiting', !snd);
+  sec.classList.toggle('off', !!(snd && !snd.s.on));
+  const power = $('sndPower');
+  power.setAttribute('aria-pressed', snd && snd.s.on ? 'true' : 'false');
+  power.querySelector('span').textContent = snd && !snd.s.on ? 'Off' : 'On';
+  if (!snd) { drawCurve(Array(BAND_COUNT).fill(0), null); return; }
+  const s = snd.s;
+  $('srow-preset').querySelector('.pname').textContent = s.preset;
+  for (const c of SLIDERS) {
+    const row = $(`srow-${c.k}`);
+    const v = s[c.k] || 0;
+    const pos = (v - c.min) / (c.max - c.min);
+    const zero = c.min < 0 ? 0.5 : 0;
+    const fill = row.querySelector('.fill');
+    fill.style.insetInlineStart = `${Math.min(pos, zero) * 100}%`;
+    fill.style.inlineSize = `${Math.abs(pos - zero) * 100}%`;
+    row.querySelector('.knob').style.insetInlineStart = `${pos * 100}%`;
+    row.querySelector('.val').textContent = sliderText(c, v);
+    row.setAttribute('aria-valuenow', String(v));
+    row.setAttribute('aria-valuetext', sliderText(c, v));
+  }
+  // The bands the focused control moves are lit on the curve.
+  const k = document.activeElement && document.activeElement.dataset && document.activeElement.dataset.k;
+  const w = k && snd.w && snd.w[k];
+  drawCurve(soundCurve(s), w ? w.map((x) => x >= 0.5) : null);
+}
+
+function curveX(i) {
+  return 16 + i * ((540 - 32) / (BAND_COUNT - 1));
+}
+
+function drawCurve(gains, hot) {
+  const mid = 56;
+  const scale = (mid - 8) / 12; // ±12 dB fills the box; the rare ±15 may overhang a little
+  const xs = gains.map((_, i) => curveX(i));
+  const ys = gains.map((g) => mid - g * scale);
+  // A smooth line through the ten points (Catmull-Rom as cubic Béziers).
+  let d = `M${xs[0].toFixed(1)},${ys[0].toFixed(1)}`;
+  for (let i = 0; i < xs.length - 1; i++) {
+    const a = Math.max(0, i - 1);
+    const b = Math.min(xs.length - 1, i + 2);
+    const c1x = xs[i] + (xs[i + 1] - xs[a]) / 6;
+    const c1y = ys[i] + (ys[i + 1] - ys[a]) / 6;
+    const c2x = xs[i + 1] - (xs[b] - xs[i]) / 6;
+    const c2y = ys[i + 1] - (ys[b] - ys[i]) / 6;
+    d += ` C${c1x.toFixed(1)},${c1y.toFixed(1)} ${c2x.toFixed(1)},${c2y.toFixed(1)} ${xs[i + 1].toFixed(1)},${ys[i + 1].toFixed(1)}`;
+  }
+  $('curveLine').setAttribute('d', d);
+  $('curveFill').setAttribute('d', `${d} L${xs[xs.length - 1].toFixed(1)},${mid} L${xs[0].toFixed(1)},${mid} Z`);
+  const dots = $('curveDots');
+  if (dots.childElementCount !== xs.length) {
+    dots.textContent = '';
+    xs.forEach(() => dots.appendChild(document.createElementNS('http://www.w3.org/2000/svg', 'circle')));
+  }
+  [...dots.children].forEach((dot, i) => {
+    dot.setAttribute('cx', xs[i].toFixed(1));
+    dot.setAttribute('cy', ys[i].toFixed(1));
+    dot.setAttribute('r', hot && hot[i] ? '6' : '3.5');
+    dot.classList.toggle('hot', !!(hot && hot[i]));
+  });
+}
+
+// ---- Fine-tune: ten bands side by side; swipe left/right to pick, up/down to change
+
+function openBands() {
+  if (!snd) { history.back(); return; }
+  const box = $('bandCols');
+  if (!box.childElementCount) {
+    (snd.freqs || []).forEach((f, i) => {
+      const col = document.createElement('div');
+      col.className = 'bcol';
+      col.id = `band-${i}`;
+      col.dataset.i = String(i);
+      col.tabIndex = 0;
+      col.setAttribute('role', 'slider');
+      col.setAttribute('aria-orientation', 'vertical');
+      col.setAttribute('aria-label', `${f} hertz. Swipe up or down to change.`);
+      col.innerHTML = '<span class="bv"></span><span class="bt"><span class="mid"></span><span class="fill"></span><span class="knob"></span></span><span class="bf"></span><span class="bo"></span>';
+      col.querySelector('.bf').textContent = f;
+      box.appendChild(col);
+    });
+    box.addEventListener('keydown', (e) => {
+      const col = e.target.closest && e.target.closest('.bcol');
+      if (!col) return;
+      if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+        e.preventDefault();
+        e.stopPropagation();
+        const i = Number(col.dataset.i);
+        const next = Math.max(-12, Math.min(12, (snd.s.bands[i] || 0) + (e.key === 'ArrowUp' ? 1 : -1)));
+        if (next !== snd.s.bands[i]) { snd.s.bands[i] = next; soundChanged(); }
+      } else if (e.key === 'Enter') {
+        e.preventDefault();
+        showToast('Swipe up or down to change this band');
+      }
+    });
+  }
+  renderBands();
+  const target = (view.focus && $(view.focus)) || $('band-5');
+  if (target) target.focus();
+}
+
+function renderBands() {
+  if (!snd) return;
+  const gains = soundCurve(snd.s);
+  [...$('bandCols').children].forEach((col, i) => {
+    const g = gains[i];
+    const pos = (g + DB_RANGE) / (2 * DB_RANGE);
+    const fill = col.querySelector('.fill');
+    fill.style.insetBlockEnd = `${Math.min(pos, 0.5) * 100}%`;
+    fill.style.blockSize = `${Math.abs(pos - 0.5) * 100}%`;
+    col.querySelector('.knob').style.insetBlockStart = `${(1 - pos) * 100}%`;
+    const shown = Math.round(g);
+    col.querySelector('.bv').textContent = `${shown > 0 ? '+' : ''}${shown}`;
+    const own = snd.s.bands[i] || 0;
+    col.querySelector('.bo').textContent = own ? `tuned ${own > 0 ? '+' : ''}${own}` : '';
+    col.setAttribute('aria-valuenow', String(shown));
+    col.setAttribute('aria-valuetext', `${signedDb(shown)}${own ? `, tuned ${signedDb(own)}` : ''}`);
+  });
+}
+
+// ---- My sounds: three save slots kept on the phone
+
+function openSlots() {
+  if (!snd) { history.back(); return; }
+  renderSlots(false);
+  const first = $('slotList').querySelector('button:not([disabled])');
+  if (first) first.focus();
+}
+
+function renderSlots(keepFocus) {
+  const list = $('slotList');
+  const was = keepFocus && document.activeElement ? document.activeElement.id : null;
+  list.textContent = '';
+  (snd.slots || []).forEach((sl) => {
+    const li = document.createElement('li');
+    li.className = 'slot';
+    li.innerHTML = '<span class="stext"><span class="sn"></span><span class="sd"></span></span>'
+      + '<button class="pill-btn load"><span>Load</span></button><button class="pill-btn save"><span>Save here</span></button>';
+    li.querySelector('.sn').textContent = `Sound ${sl.n}`;
+    li.querySelector('.sd').textContent = sl.label || 'Empty';
+    const load = li.querySelector('.load');
+    const save = li.querySelector('.save');
+    load.id = `slot-load-${sl.n}`;
+    save.id = `slot-save-${sl.n}`;
+    load.disabled = !sl.label;
+    load.addEventListener('click', () => {
+      dropPendingSound(); // the loaded sound replaces any unsent adjustment
+      sndLoading = sl.n;
+      send('sndLoad', { n: sl.n });
+      showToast(`Loading Sound ${sl.n}…`);
+    });
+    save.addEventListener('click', () => {
+      const store = () => {
+        // The sound travels with the save, so the two can never arrive out of order.
+        dropPendingSound();
+        send('sndSave', { n: sl.n, s: snd.s });
+        showToast(`Saved as Sound ${sl.n}`);
+      };
+      if (sl.label) confirmTwice(save, 'Replace?', store);
+      else store();
+    });
+    list.appendChild(li);
+  });
+  if (was && $(was)) $(was).focus();
 }
 
 // ---- voice: tools Meta AI can call (only where WebMCP is switched on) ---------------------
@@ -725,6 +1142,8 @@ function wire() {
   $('volup').addEventListener('click', () => nudgeVolume(1));
   $('queue').addEventListener('click', openQueue);
   $('library').addEventListener('click', openLibraryRoot);
+  $('soundBtn').addEventListener('click', () => openSub('sound', 'soundBtn'));
+  buildSound();
   $('more').addEventListener('click', () => {
     if (view.screen === 'lib') go({ ...view, page: (view.page || 0) + 1, focus: null });
   });
@@ -749,11 +1168,14 @@ function wire() {
     }
   });
 
-  document.addEventListener('focusin', (e) => { if (view.screen === 'now') showTip(e.target); });
+  document.addEventListener('focusin', (e) => {
+    if (view.screen === 'now') showTip(e.target);
+    else if (view.screen === 'sound' && snd) renderSound();
+  });
 
   window.addEventListener('popstate', onPopState);
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && view.screen !== 'now') { e.preventDefault(); history.back(); }
+    if (e.key === 'Escape' && view.screen !== ROOT.screen) { e.preventDefault(); history.back(); }
   });
   document.addEventListener('visibilitychange', onVisibility);
   wireDrag();
@@ -768,11 +1190,16 @@ async function main() {
   }
   topic = pair.t;
   key = await crypto.subtle.importKey('raw', fromB64url(pair.k), 'AES-GCM', false, ['encrypt', 'decrypt']);
-  history.replaceState({ screen: 'now' }, '');
+  history.replaceState(ROOT, '');
   wire();
-  renderNow();
-  focusDefault();
-  registerVoiceTools();
+  if (APP_MODE === 'sound') {
+    document.title = 'Sound Lab';
+    render(ROOT);
+  } else {
+    renderNow();
+    focusDefault();
+    registerVoiceTools();
+  }
   registerServiceWorker();
   await catchUp();
   if (view.screen === 'now') focusDefault();

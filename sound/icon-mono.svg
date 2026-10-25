@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- Monochrome mask for the glasses launcher: only transparency matters, the device tints it. -->
+  <g id="glyph" fill="#fff">
+    <rect x="14.2" y="10" width="3.6" height="44" rx="1.8" opacity=".5"/>
+    <rect x="30.2" y="10" width="3.6" height="44" rx="1.8" opacity=".5"/>
+    <rect x="46.2" y="10" width="3.6" height="44" rx="1.8" opacity=".5"/>
+    <circle cx="16" cy="39" r="7"/>
+    <circle cx="32" cy="21" r="7"/>
+    <circle cx="48" cy="31" r="7"/>
+  </g>
+</svg>
