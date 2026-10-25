@@ -10,6 +10,9 @@
 
 * { box-sizing: border-box; }
 
+/* SVG elements ignore the hidden attribute unless told to. */
+[hidden] { display: none !important; }
+
 html, body {
   margin: 0;
   inline-size: 100%;
