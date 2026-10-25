@@ -59,7 +59,7 @@ svg { fill: currentColor; }
 .vol { display: inline-flex; align-items: center; gap: 4px; }
 .gbat { display: inline-flex; align-items: center; gap: 4px; font-variant-numeric: tabular-nums; }
 .gbat svg { inline-size: 18px; block-size: 18px; }
-.gbat.low { color: #ffb08a; }
+.gbat.low { color: #ffb08a; font-weight: 600; }
 .gbat.charging { color: var(--accent); }
 /* Charging also shows a bolt, so it never depends on colour alone. */
 .gbat .gbat-bolt { display: none; }
@@ -309,3 +309,11 @@ body.calm .srow:focus .fill, body.calm .srow:focus .knob, body.calm .bcol:focus 
   body.calm .artwrap img, body.calm .album, body.calm .topline > *, body.calm .seek .times,
   body.calm .soundhead > *, body.calm .freqs { transition: opacity 900ms ease; }
 }
+
+/* ---- warnings: the phone not answering, the link reconnecting --------------------------------
+   A warning on the state line has to read outdoors: warm and bold, never dim grey, and its dot is
+   never the live one. Under a warning, Now Playing shows the phone's last stored state, dimmed, so it
+   does not pass for live. */
+.topline .state.warn, .soundhead .state.warn { color: #ffb08a; font-weight: 600; }
+.state.warn .dot { background: #ffb08a; box-shadow: none; }
+body.stale #now .track, body.stale #now .seek, body.stale #now .row.main { opacity: 0.55; }

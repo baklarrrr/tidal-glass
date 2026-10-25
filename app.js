@@ -29,7 +29,10 @@ let key = null;
 let state = null;
 let prevState = null;
 let lastHeard = 0;
-let pendingSince = 0;
+// When the phone last said something while this visit listened. A broker's stored copy (sent because
+// the page just subscribed) shows the phone's last state but is not the phone answering now.
+let heardLive = 0;
+let pendingSince = 0; // the oldest request still waiting for the phone (0 when none)
 let lastHello = 0;
 let tickTimer = 0;
 let lastAction = '';
@@ -122,7 +125,7 @@ function linkChanged() {
     if (!linkDownSince) linkDownSince = Date.now();
     if (links.length && !spareTimer && !links.some((l) => l.spare)) spareTimer = setTimeout(openSpare, SPARE_AFTER);
   }
-  $('stateText').textContent = stateLine();
+  renderStateLine();
 }
 
 // The link library is a large file. On the first launch after an update the previous offline copy
@@ -169,7 +172,9 @@ function addBroker(url, extra = {}) {
     // broker kept.
     if (APP_MODE === 'sound') askSound(true);
   });
-  client.on('message', (t, payload) => handle(new TextDecoder().decode(payload)));
+  // MQTT marks a broker's stored copy (sent on subscribing) as retained, and a message published while
+  // the page listens as not retained.
+  client.on('message', (t, payload, packet) => handle(new TextDecoder().decode(payload), !!(packet && packet.retain)));
   client.on('offline', linkChanged);
   client.on('close', linkChanged);
   client.on('error', () => { /* mqtt.js reconnects by itself */ });
@@ -199,7 +204,7 @@ function flushOutbox() {
   const due = outbox.filter((o) => now - o.at < OUTBOX_MAX_AGE);
   outbox = [];
   for (const o of due) {
-    if (o.expects) pendingSince = Date.now();
+    if (o.expects && !pendingSince) pendingSince = Date.now();
     for (const l of live) l.publish(`bkr/${topic}/c`, o.body, { qos: 1 });
   }
 }
@@ -216,21 +221,33 @@ async function send(c, extra = {}) {
     if (document.visibilityState === 'visible') openLink();
     return true;
   }
-  if (expects) pendingSince = Date.now();
+  // The oldest unanswered request counts: asking again must not reset the clock on a silent phone.
+  if (expects && !pendingSince) pendingSince = Date.now();
   for (const l of live) l.publish(`bkr/${topic}/c`, body, { qos: 1 });
   return true;
 }
 
 // ---- connection --------------------------------------------------------------------------
 
-async function handle(text) {
-  if (recent.includes(text)) return; // the same message from the other broker
-  recent.push(text);
-  if (recent.length > 12) recent.shift();
+async function handle(text, retained = false) {
+  // The same message arrives from every broker, stored on one and live on another; it is drawn once,
+  // and its live copy still counts as the phone answering.
+  const again = recent.includes(text);
+  if (!again) {
+    recent.push(text);
+    if (recent.length > 12) recent.shift();
+  }
   let m;
   try { m = await openMessage(text); } catch (e) { return; }
   lastHeard = Date.now();
-  pendingSince = 0;
+  if (!retained) {
+    heardLive = Date.now();
+    pendingSince = 0;
+  }
+  if (again) {
+    if (!retained) renderStateLine();
+    return;
+  }
   if (m.t === 'state') {
     // A broker that missed some updates can hand over an older copy on connect; keep the newest.
     if (state && m.at < state.at) return;
@@ -251,7 +268,11 @@ async function handle(text) {
 }
 
 function sayHello() {
-  if (APP_MODE === 'sound') { askSound(); return; }
+  if (APP_MODE === 'sound') {
+    lastHello = Date.now();
+    askSound();
+    return;
+  }
   if (Date.now() - lastHello < 15000) return;
   lastHello = Date.now();
   // Whether this browser can read the glasses' own battery (tells the phone app's log; no UI use yet).
@@ -266,6 +287,9 @@ function sayHello() {
 // Coming back, the retained state arrives the moment a broker connects.
 function onVisibility() {
   if (document.visibilityState === 'visible') {
+    // A new visit: the phone has to answer again before anything shows as live.
+    heardLive = 0;
+    pendingSince = 0;
     openLink();
     sayHello();
     startTick();
@@ -394,16 +418,13 @@ function hasTrack() {
   return !!(state && state.acc && state.ses && state.ti);
 }
 
-// Play pressed with Tidal closed: 'starting' for 15 s, then 'failed' (said in the headline) until 40 s.
+// Play pressed with Tidal closed: 'starting' for 15 s. Then 'failed' (said in the headline) if the phone
+// has answered since the press, so Tidal itself did not start, or 'silent' if the phone has not, so it
+// is the phone that is not answering. Either stays until the next press.
 function startPhase() {
   if (!startingSince || hasTrack()) return '';
-  const t = Date.now() - startingSince;
-  if (t < 15000) return 'starting';
-  if (t < 40000) return 'failed';
-  // Over: back to the closed screen. The press that went unanswered is not a dead phone.
-  startingSince = 0;
-  pendingSince = 0;
-  return '';
+  if (Date.now() - startingSince < 15000) return 'starting';
+  return heardLive > startingSince ? 'failed' : 'silent';
 }
 
 // The glasses' battery: the glasses' own browser reading when it has one (on the glasses it matched the
@@ -453,7 +474,8 @@ function phoneSilent() {
 
 // A warning on screen (link down, phone silent, Tidal not starting) keeps the page out of calm.
 function warningShown() {
-  return !!((linkDownSince && Date.now() - linkDownSince > 5000) || phoneSilent() || startPhase() === 'failed'
+  const phase = startPhase();
+  return !!((linkDownSince && Date.now() - linkDownSince > 5000) || phoneSilent() || phase === 'failed' || phase === 'silent'
     || (typeof mqtt === 'undefined' && mqttTries >= 10 && !window.__testLink));
 }
 
@@ -463,12 +485,26 @@ function stateLine() {
   if (typeof mqtt === 'undefined' && mqttTries >= 10 && !window.__testLink) return 'No link yet: press Back, then Refresh';
   if (!state) return lastHeard ? 'Waiting for your phone…' : 'Connecting to your phone…';
   if (linkDownSince && Date.now() - linkDownSince > 5000) return 'Reconnecting…';
+  const phase = startPhase();
   // While Tidal starts the phone may not answer at once; that is not a dead phone.
-  if (startPhase()) return 'Phone connected';
-  if (phoneSilent()) return 'Your phone is not answering';
-  if (!hasTrack()) return 'Phone connected';
+  if (phase === 'starting' && !phoneSilent()) return heardLive ? 'Phone connected' : 'Checking your phone…';
+  if (phoneSilent() || phase === 'silent') return 'Your phone is not answering';
+  // Only the phone's own answer this visit is live; until then the screen shows its last stored state.
+  if (!heardLive) return 'Checking your phone…';
+  if (phase || !hasTrack()) return 'Phone connected';
   if (state.buf) return 'Buffering…';
   return state.play ? 'Playing' : 'Paused';
+}
+
+// The state line, its dot and the warning look, redrawn together whenever any of them may change: a
+// warning never sits beside a live dot. Under a warning the rest of Now Playing is the phone's last
+// state, so it is dimmed.
+function renderStateLine() {
+  const warn = warningShown();
+  $('stateText').textContent = stateLine();
+  $('stateText').parentElement.classList.toggle('warn', warn);
+  $('dot').classList.toggle('live', !!(hasTrack() && state.play && !state.buf && heardLive && !warn));
+  document.body.classList.toggle('stale', !!state && warn);
 }
 
 // Headline and line under it when no song is showing: what is going on, and what to do.
@@ -484,6 +520,7 @@ function emptyHeadline(s) {
     return closed ? ["Tidal didn't start", 'Open Tidal on your phone, then press Play.']
       : ["Tidal didn't play", 'Pick something from your library, or press Play on your phone.'];
   }
+  if (phase === 'silent') return ['Your phone is not answering', 'Open Tidal Glass on your phone, then press Play.'];
   return closed ? ['Tidal is closed', 'Press Play to start it where you left off.'] : ['Nothing playing', 'Press Play, or pick something from your library.'];
 }
 
@@ -537,8 +574,7 @@ function renderNow() {
   const s = state;
   const track = hasTrack();
 
-  $('stateText').textContent = stateLine();
-  $('dot').classList.toggle('live', !!(track && s.play && !s.buf && !phoneSilent()));
+  renderStateLine();
   $('atmos').hidden = !(track && s.atmos);
   $('explicit').hidden = !(track && s.ex);
   const { cur } = volParts();
@@ -654,15 +690,21 @@ function startTick() {
   tickTimer = setInterval(() => {
     // Only the clock moves; when paused or idle there is nothing to redraw.
     if (view.screen === 'now' && state && state.play) tick();
-    $('stateText').textContent = stateLine();
+    renderStateLine();
     if (view.screen === 'sound' || view.screen === 'bands' || view.screen === 'slots') renderSoundStatus();
     // A failed Tidal start changes the headline, not only this line.
     const phase = startPhase();
     if (phase !== lastPhase) { lastPhase = phase; renderNow(); }
-    // While on screen, ask the phone again now and then, so a phone that has gone silent says so.
+    // While on screen, ask the phone again now and then (every 3 minutes, not every tick), so a phone
+    // that has gone silent says so.
     if (Date.now() - lastHello > RECHECK_MS) {
-      lastHello = 0;
-      if (APP_MODE === 'sound') askSound(true); else sayHello();
+      if (APP_MODE === 'sound') {
+        lastHello = Date.now();
+        askSound(true);
+      } else {
+        lastHello = 0;
+        sayHello();
+      }
     }
     checkCalm();
   }, 1000);
@@ -693,6 +735,9 @@ function press(c, extra) {
   if (c === 'play' && !hasTrack()) {
     startingSince = Date.now();
     renderNow(); // the headline says "Starting…" at once
+  } else if (startingSince) {
+    startingSince = 0; // any other press ends the "didn't start" message
+    renderNow();
   }
   send(c, extra);
   // Play and pause are safe to repeat: if Tidal has not changed after a moment (the phone was
@@ -946,13 +991,27 @@ function repairSwipe(from, dir) {
     const i = rows.indexOf(from);
     let want = null;
     if (i >= 0) want = rows[i + dir] || (dir > 0 ? list.below && list.below() : list.above && list.above());
-    else if (list.below && from === list.below() && dir < 0) want = rows[rows.length - 1];
+    else if (list.below && from === list.below()) want = dir < 0 ? rows[rows.length - 1] : null; // past More: stay
     else if (dir > 0 || now === list.box) want = rows[0];
     if (want) want.focus({ preventScroll: true });
   }
   const f = document.activeElement;
   if (rows.includes(f)) reveal(f, dir);
+  else if (list.below && f === list.below()) trimTop(list.box, f); // reaching More scrolled the list
 }
+
+// A swipe past the end of a list has nowhere to go. Left to the platform it scrolls the list by
+// itself, which leaves half a row peeking in at the top (Photographer recheck 2026-10-25), so it does
+// nothing instead.
+function atListEnd(from, dir) {
+  const list = listOf(from);
+  if (!list || dir < 0) return false;
+  const below = list.below && list.below();
+  if (below) return from === below;
+  const rows = list.rows();
+  return rows.length > 0 && from === rows[rows.length - 1];
+}
+
 
 // Scrolls the focused row's list so the row shows whole, 14 px inside the list's edges (its padding).
 // Going down, a row left cut by the top edge is scrolled out of sight, so no sliver of it peeks out.
@@ -963,16 +1022,34 @@ function reveal(el, dir = 0) {
   const b = box.getBoundingClientRect();
   const r = el.getBoundingClientRect();
   if (r.top < b.top + pad) box.scrollTop -= (b.top + pad) - r.top;
-  else if (r.bottom > b.bottom - pad) {
-    box.scrollTop += r.bottom - (b.bottom - pad);
-    if (dir >= 0) {
-      const rows = [...box.querySelectorAll('.srow, li')];
-      const top = box.getBoundingClientRect().top + pad;
-      const cut = rows.find((x) => { const q = x.getBoundingClientRect(); return q.top < top - 1 && q.bottom > box.getBoundingClientRect().top; });
-      const next = cut && rows[rows.indexOf(cut) + 1];
-      if (next && next.getBoundingClientRect().top > top) box.scrollTop += next.getBoundingClientRect().top - top;
-    }
-  }
+  else if (r.bottom > b.bottom - pad) box.scrollTop += r.bottom - (b.bottom - pad);
+  trimTop(box, el);
+}
+
+// No sliver at the top: the list's padding shows rows too, and the rows' gaps are narrower than the
+// padding, so lining a row up with the padding left a strip of the row above it (Photographer recheck
+// 2026-10-25). A row cut by the top edge is scrolled fully out of sight when the list can go that far
+// and the focused row stays whole; otherwise it is shown whole.
+function trimTop(box, el) {
+  // Cut = partly hidden by the top edge. A row lying whole inside the padding is not cut.
+  const cutRow = () => {
+    const top = box.getBoundingClientRect().top;
+    return [...box.querySelectorAll('.srow, li')].find((x) => {
+      if (x === el || x.contains(el)) return false;
+      const q = x.getBoundingClientRect();
+      return q.top < top - 0.5 && q.bottom > top + 0.5;
+    });
+  };
+  const cut = cutRow();
+  if (!cut) return;
+  const top = box.getBoundingClientRect().top;
+  const q = cut.getBoundingClientRect();
+  const before = box.scrollTop;
+  box.scrollTop = before + (q.bottom - top);
+  const b = box.getBoundingClientRect();
+  const r = el.getBoundingClientRect();
+  const whole = !box.contains(el) || (r.top >= b.top - 0.5 && r.bottom <= b.bottom + 0.5);
+  if (cutRow() || !whole) box.scrollTop = before - (top - q.top);
 }
 
 // ---- Sound Lab ---------------------------------------------------------------------------
@@ -1008,6 +1085,7 @@ function askSound(force) {
 function receiveSound(m) {
   // A broker that missed some updates can hand over an older copy on connect; keep the newest.
   if (snd && m.at && snd.at && m.at < snd.at) return;
+  sndConfirmed = JSON.parse(JSON.stringify(m.s)); // what the phone itself last said it plays
   if (sndPending && sndPending.check(m)) {
     const done = sndPending.done;
     sndPending = null;
@@ -1232,6 +1310,7 @@ function fitTools() {
 // see-through display overlapping text cannot be read).
 let sndNote = null;    // { text, until }
 let sndPending = null; // { doing, check(m), at }: sent, waiting for the phone's sound report to confirm
+let sndConfirmed = null; // the settings in the phone's last sound report
 
 function soundNote(text, ms = 2500) {
   sndNote = { text, until: Date.now() + ms };
@@ -1256,7 +1335,16 @@ function renderSoundStatus() {
   else if (sndPending) {
     warn = Date.now() - sndPending.at >= 7000;
     text = warn ? 'Your phone did not confirm. Try again.' : sndPending.doing;
-    if (Date.now() - sndPending.at > 12000) sndPending = null;
+    if (Date.now() - sndPending.at > 12000) {
+      // Never confirmed: the controls go back to what the phone last said it plays, so nothing here
+      // claims a change that may not have happened.
+      sndPending = null;
+      if (snd && sndConfirmed) {
+        snd.s = JSON.parse(JSON.stringify(sndConfirmed));
+        if (view.screen === 'sound') renderSound();
+        else if (view.screen === 'bands') renderBands();
+      }
+    }
   } else if (linkDownSince && Date.now() - linkDownSince > 5000) { text = 'Reconnecting…'; warn = true; }
   else if (!snd) {
     warn = !!(sndAsked && Date.now() - sndAsked > 7000);
@@ -1266,7 +1354,8 @@ function renderSoundStatus() {
   else { text = snd.status || ''; live = !!snd.active; }
   sndWarn = warn;
   $('sndStateText').textContent = text;
-  $('sndDot').classList.toggle('live', live);
+  $('sndStateText').parentElement.classList.toggle('warn', warn);
+  $('sndDot').classList.toggle('live', live && !warn);
   // Fine-tune and My sounds keep their hint in the same place, and show notes and confirmations there.
   const busy = (sndNote && Date.now() < sndNote.until) || sndPending;
   for (const id of ['bandsState', 'slotsState']) $(id).textContent = busy || warn ? text : $(id).dataset.default;
@@ -1588,7 +1677,12 @@ function wire() {
     if ((e.key !== 'ArrowUp' && e.key !== 'ArrowDown') || e.defaultPrevented) return;
     const from = e.target;
     if (!listOf(from)) return;
-    setTimeout(() => repairSwipe(from, e.key === 'ArrowDown' ? 1 : -1), 0);
+    const dir = e.key === 'ArrowDown' ? 1 : -1;
+    if (atListEnd(from, dir)) {
+      e.preventDefault();
+      return;
+    }
+    setTimeout(() => repairSwipe(from, dir), 0);
   });
 
   // Lists are one column, so sideways swipes are free: left steps back, right opens a folder.

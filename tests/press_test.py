@@ -187,14 +187,40 @@ with sync_playwright() as p:
     page.evaluate("pendingSince = 0; renderNow();")
     check("a phone that does not answer says so and the live dot goes out", silent == ["Your phone is not answering", False], json.dumps(silent))
 
-    # 12. Tidal does not start: the headline says so; after 40 s back to closed, never "not answering" (R1).
-    page.evaluate("s => { state = {t: 'state', acc: true, ses: false, play: false, buf: false, pos: 0, at: Date.now(), vol: s.vol, q: [], qa: -1}; startingSince = Date.now() - 20000; pendingSince = Date.now() - 20000; renderNow(); }", STATE)
+    # 12. Tidal does not start (R1; Director recheck 2026-10-25): if the phone answered after the press,
+    # the headline says Tidal didn't start; if the phone has said nothing since, it says the phone is not
+    # answering (never blaming Tidal). Either stays until the next press.
+    CLOSED = "s => { state = {t: 'state', acc: true, ses: false, play: false, buf: false, pos: 0, at: Date.now(), vol: s.vol, q: [], qa: -1}; "
+    page.evaluate(CLOSED + "startingSince = Date.now() - 20000; heardLive = Date.now() - 13000; pendingSince = 0; renderNow(); }", STATE)
     failed = page.evaluate("[$('title').textContent, $('artist').textContent, stateLine()]")
-    page.evaluate("startingSince = Date.now() - 41000; stateLine(); renderNow();")
-    after40 = page.evaluate("[$('title').textContent, stateLine(), pendingSince]")
-    check("a failed start is in the headline, then clears without a false 'not answering'",
+    page.evaluate("startingSince = Date.now() - 41000; heardLive = Date.now() - 34000; renderNow();")
+    after40 = page.evaluate("[$('title').textContent, stateLine()]")
+    page.evaluate(CLOSED + "startingSince = Date.now() - 20000; heardLive = Date.now() - 60000; pendingSince = Date.now() - 20000; renderNow(); }", STATE)
+    silent = page.evaluate("[$('title').textContent, stateLine(), document.querySelector('.topline .state').classList.contains('warn')]")
+    page.evaluate("press('volUp')")
+    page.wait_for_timeout(100)
+    cleared = page.evaluate("[$('title').textContent, startingSince]")
+    page.evaluate("pendingSince = 0; heardLive = Date.now(); renderNow();")
+    check("a failed start: Tidal blamed only after the phone answered, the phone blamed when it is silent, kept until the next press",
           failed[0] == "Tidal didn't start" and "then press Play" in failed[1] and failed[2] == "Phone connected"
-          and after40 == ["Tidal is closed", "Phone connected", 0], json.dumps([failed, after40]))
+          and after40 == ["Tidal didn't start", "Phone connected"]
+          and silent == ["Your phone is not answering", "Your phone is not answering", True]
+          and cleared == ["Tidal is closed", 0], json.dumps([failed, after40, silent, cleared]))
+
+    # 27. A broker's stored copy is not the phone answering (Director recheck 2026-10-25): on a fresh
+    # visit it shows, but not as live; without a live answer the warning comes, in the warning style, the
+    # dot goes out and the rest is dimmed; the same message arriving live (from another broker) counts.
+    page.evaluate("s => { heardLive = 0; pendingSince = Date.now(); state = null; }", STATE)
+    page.evaluate("async s => { window.__stored = await seal({...s, play: true, at: Date.now() + 30000}); await handle(window.__stored, true); }", STATE)
+    stored = page.evaluate("[stateLine(), $('dot').classList.contains('live'), $('title').textContent]")
+    page.evaluate("pendingSince = Date.now() - 8000; renderStateLine();")
+    warned = page.evaluate("[stateLine(), $('dot').classList.contains('live'), document.querySelector('.topline .state').classList.contains('warn'), document.body.classList.contains('stale'), getComputedStyle(document.querySelector('.topline .state')).fontWeight]")
+    page.evaluate("async () => { await handle(window.__stored, false); }")
+    live = page.evaluate("[stateLine(), $('dot').classList.contains('live'), document.body.classList.contains('stale'), pendingSince]")
+    check("a stored copy shows but is not live; no answer warns plainly; the same message live counts",
+          stored == ["Checking your phone…", False, STATE["ti"]] and warned == ["Your phone is not answering", False, True, True, "600"]
+          and live[0] == "Playing" and live[1] is True and live[2] is False and live[3] == 0, json.dumps([stored, warned, live]))
+    page.evaluate("renderNow()")
 
     # 13. Calm never dims a warning (R11).
     page.evaluate("s => { state = {...s, play: true, at: Date.now()}; startingSince = 0; renderNow(); }", STATE)
@@ -287,6 +313,23 @@ with sync_playwright() as p:
         walk.append(page.evaluate(ACTIVE))
         check(NAME19, walk == names + ["more", names[-1]], json.dumps(walk))
     guard(NAME19, t19)
+
+    # 19b. A swipe down past More stays on More; it never jumps back to the top (Director and
+    # Photographer rechecks 2026-10-25, W5).
+    NAME19B = "library: Down from More stays on More"
+
+    # No row is left cut by the top edge of a list, after reaching More or swiping past it.
+    CUT = """(id => { const box = document.getElementById(id); const b = box.getBoundingClientRect();
+      return [...box.querySelectorAll('.srow, li')].filter((x) => { const q = x.getBoundingClientRect();
+        return q.top < b.top - 0.5 && q.bottom > b.top + 0.5; }).length; })"""
+
+    def t19b():
+        page.focus("#more")
+        page.keyboard.press("ArrowDown")
+        page.wait_for_timeout(150)
+        cut = page.evaluate(CUT + "('items')")
+        check(NAME19B, page.evaluate(ACTIVE) == "more" and cut == 0, json.dumps([page.evaluate(ACTIVE), cut]))
+    guard(NAME19B, t19b)
 
     # 20. Choosing a song there: back on Now Playing, "Playing …" holds the line against the Library
     # button's name, which shows once the confirmation ends.
@@ -413,6 +456,27 @@ with sync_playwright() as p:
               and tools == ["sndFine", "sndSlots", "sndTest", "sndReset"], json.dumps([rows, tools]))
     guard(NAME22, t22)
 
+    # 30. Sound Lab: a swipe down past Balance does nothing: focus stays, the list does not scroll by
+    # itself, and no row is left cut at the top (Photographer recheck 2026-10-25, W1 step 08).
+    NAME30 = "Sound Lab: Down from Balance stays put, with no half row at the top"
+
+    def t30():
+        # Reached the way the glasses reach it: by swiping down from Preset.
+        sp.focus("#srow-preset")
+        for _ in range(6):
+            sp.keyboard.press("ArrowDown")
+            sp.wait_for_timeout(150)
+        before = sp.evaluate("$('sndRows').scrollTop")
+        for _ in range(2):
+            sp.keyboard.press("ArrowDown")
+            sp.wait_for_timeout(150)
+        after = sp.evaluate("[document.activeElement.id, $('sndRows').scrollTop]")
+        cut = sp.evaluate("""(() => { const box = $('sndRows'); const b = box.getBoundingClientRect();
+          return [...box.querySelectorAll('.srow')].filter((x) => { const q = x.getBoundingClientRect();
+            return q.top < b.top - 0.5 && q.bottom > b.top + 0.5; }).length; })()""")
+        check(NAME30, after == ["srow-bal", before] and cut == 0, json.dumps([before, after, cut]))
+    guard(NAME30, t30)
+
     # 23. Calm in Sound Lab: 15 s untouched dims it; the first swipe wakes it and still changes the value;
     # no calm while the header shows a warning (no confirmation, not answering, reconnecting).
     NAME23 = "Sound Lab calm: dims after 15 s, a swipe wakes it and still acts, never over a warning"
@@ -436,6 +500,38 @@ with sync_playwright() as p:
         check(NAME23, calm and woke == [False, bass_before + 1] and "sndSet" in sent and all(w[1] is False for w in warns),
               json.dumps([calm, woke, sent, warns]))
     guard(NAME23, t23)
+
+    # 28. Sound Lab from its own icon asks the phone once, then every 3 minutes, not every 5 s, so a
+    # silent phone is said to be silent; the warning uses the warning style (Director recheck 2026-10-25).
+    NAME28 = "Sound Lab: asks every 3 minutes, so a silent phone shows as not answering, in the warning style"
+
+    def t28():
+        # As at launch from the icon: never asked yet. The next tick asks once; before the fix it asked
+        # again every 5 s for ever.
+        sp.evaluate("window.__sent.length = 0; pendingSince = 0; sndPending = null; sndNote = null; lastHello = 0; sndAsked = 0;")
+        sp.wait_for_timeout(11500)
+        asks = sp.evaluate("async () => (await Promise.all(window.__sent.map(async b => (await openMessage(b)).c))).filter(c => c === 'snd').length")
+        sp.evaluate("pendingSince = Date.now() - 8000; renderSoundStatus();")
+        st = sp.evaluate("[$('sndStateText').textContent, document.querySelector('.soundhead .state').classList.contains('warn'), $('sndDot').classList.contains('live')]")
+        sp.evaluate("pendingSince = 0; renderSoundStatus();")
+        check(NAME28, asks == 1 and st == ["Your phone is not answering", True, False], json.dumps([asks, st]))
+    guard(NAME28, t28)
+
+    # 29. Sound Lab: an Off the phone never confirms goes back to what the phone last reported, so the
+    # header and switch never claim it later (Director recheck 2026-10-25, S05r).
+    NAME29 = "Sound Lab: an unconfirmed Off returns to the phone's last report, never claimed later"
+
+    def t29():
+        sp.evaluate("async m => { await handle(await seal({...m, at: 10})); }", SND)
+        sp.wait_for_timeout(100)
+        sp.focus("#sndPower")
+        sp.keyboard.press("Enter")
+        sp.wait_for_timeout(100)
+        asked = sp.evaluate("[snd.s.on, $('sndStateText').textContent]")
+        sp.evaluate("sndPending.at = Date.now() - 13000; renderSoundStatus(); pendingSince = 0; renderSoundStatus();")
+        later = sp.evaluate("[snd.s.on, $('sndPower').getAttribute('aria-pressed'), $('sndStateText').textContent]")
+        check(NAME29, asked == [False, "Turning off…"] and later == [True, "true", "Shaping Tidal"], json.dumps([asked, later]))
+    guard(NAME29, t29)
     sp.close()
 
     # 24. Sound Lab with nothing from the phone yet: no made-up sliders, no On/Off that does nothing; when
