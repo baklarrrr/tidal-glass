@@ -1,6 +1,6 @@
 """How much light Tidal Glass puts on the additive display, normal vs calm.
 
-Renders Now Playing at 600x600 with a typical album cover (synthetic, average brightness ~0.42) and
+Renders Now Playing at 600x600 with a typical album cover (synthetic, mean sRGB value about 0.52) and
 measures, per frame: mean linear light (what an additive display emits, relative to an all-white
 frame), and the share of pixels lit above 5%. Saves the frames for inspection.
 
@@ -51,7 +51,7 @@ def light(png: bytes):
 
 rows = {}
 with sync_playwright() as p:
-    b = p.chromium.launch(channel="chrome")
+    b = p.chromium.launch(channel="chrome", args=["--enable-spatial-navigation"])
     pg = b.new_context(viewport={"width": 600, "height": 600}).new_page()
     pg.add_init_script("window.__sent=[]; window.__testLink={connected:true, publish(t,b){window.__sent.push(b)}, end(){}};")
     pg.goto(f"http://127.0.0.1:47611/index.html#t=lighttest&k={KEY}")
