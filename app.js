@@ -10,7 +10,6 @@
 //   on Now Playing, Back opens the glasses' own menu and a second Back leaves the app
 //   in lists: swipe left = back, swipe right = open
 //   on the song bar: swipe left/right = skip 10 s, faster while you keep swiping
-//   pinch and drag up/down anywhere on Now Playing = volume
 
 const SERVER = 'https://ntfy.sh';
 const HISTORY_LIMIT = 4;   // the glasses keep at most five history entries including the first page
@@ -95,16 +94,21 @@ async function seal(obj) {
 }
 
 async function send(c, extra = {}) {
-  try {
-    const body = await seal({ c, ts: Date.now(), ...extra });
-    const r = await fetch(`${SERVER}/${topic}-c`, { method: 'POST', body });
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    if (EXPECTS_REPLY.has(c)) pendingSince = Date.now();
-    return true;
-  } catch (e) {
-    showToast('No connection. Check your phone has internet.');
-    return false;
+  const body = await seal({ c, ts: Date.now(), ...extra });
+  // One quick retry covers the moment the glasses' connection wakes up.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const r = await fetch(`${SERVER}/${topic}-c`, { method: 'POST', body });
+      if (r.status === 429) { showToast('The free link is busy for today. Try again shortly.'); return false; }
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      if (EXPECTS_REPLY.has(c)) pendingSince = Date.now();
+      return true;
+    } catch (e) {
+      if (attempt === 0) await new Promise((res) => setTimeout(res, 700));
+    }
   }
+  showToast('No connection. Check your phone has internet.');
+  return false;
 }
 
 // ---- connection --------------------------------------------------------------------------
@@ -395,9 +399,23 @@ function confirmAction() {
   else if ((a === 'next' || a === 'prev') && state.ti && state.ti !== prevState.ti) showToast(state.ti);
 }
 
+let confirmTimer = 0;
+
 function press(c, extra) {
   lastAction = c;
   send(c, extra);
+  // Play and pause are safe to repeat: if Tidal has not changed after a moment (the phone was
+  // reconnecting, a message was lost), send it once more instead of leaving the press unanswered.
+  if (c === 'play' || c === 'pause') {
+    const want = c === 'play';
+    clearTimeout(confirmTimer);
+    confirmTimer = setTimeout(() => {
+      confirmTimer = 0;
+      if (state && !!state.play === want) return;
+      showToast(want ? 'Asking Tidal to play again…' : 'Asking Tidal to pause again…');
+      send(c, extra);
+    }, 2500);
+  }
 }
 
 // ---- seeking: swipe on the song bar --------------------------------------------------------
@@ -420,7 +438,10 @@ function nudgeSeek(direction) {
   }, 500);
 }
 
-// ---- volume: buttons and pinch-drag --------------------------------------------------------
+// ---- volume: buttons ---------------------------------------------------------------------
+// (A pinch-and-drag volume gesture used to live here. On the glasses an ordinary pinch moves the
+// hand a little, so presses were read as drags: Play changed the volume instead. Removed for good;
+// tests/press_test.py checks that a press with hand movement is still a press.)
 
 function nudgeVolume(delta) {
   const { cur, max } = volParts();
@@ -429,40 +450,12 @@ function nudgeVolume(delta) {
   $('volText').textContent = String(volPreview);
   showToast(`Volume ${volPreview} of ${max ?? 15}`);
   clearTimeout(volTimer);
-  // One message for a whole burst of presses or a long drag.
+  // One message for a whole burst of presses.
   volTimer = setTimeout(() => {
     volTimer = 0;
     lastAction = 'volume';
     send('volSet', { v: volPreview });
   }, 350);
-}
-
-let drag = null;
-let dragEndedAt = 0;
-
-function wireDrag() {
-  document.addEventListener('pointerdown', (e) => {
-    if (view.screen !== 'now' || !state) return;
-    drag = { id: e.pointerId, y: e.clientY, moved: false, sent: 0 };
-  });
-  document.addEventListener('pointermove', (e) => {
-    if (!drag || e.pointerId !== drag.id) return;
-    const dy = drag.y - e.clientY;
-    if (!drag.moved && Math.abs(dy) < 16) return;
-    drag.moved = true;
-    const steps = Math.trunc(dy / 34);
-    if (steps !== drag.sent) {
-      nudgeVolume(steps - drag.sent);
-      drag.sent = steps;
-    }
-  });
-  const end = () => { if (drag && drag.moved) dragEndedAt = Date.now(); drag = null; };
-  document.addEventListener('pointerup', end);
-  document.addEventListener('pointercancel', end);
-  // A drag must never also count as a press on whatever it ended over.
-  document.addEventListener('click', (e) => {
-    if (Date.now() - dragEndedAt < 400) { e.preventDefault(); e.stopPropagation(); }
-  }, true);
 }
 
 // ---- screens and Back --------------------------------------------------------------------
@@ -1173,11 +1166,17 @@ function wire() {
   });
 
   window.addEventListener('popstate', onPopState);
+  // The glasses' connection comes back after charging or a restart: reconnect at once.
+  window.addEventListener('online', () => {
+    if (document.visibilityState !== 'visible') return;
+    closeStream();
+    lastHello = 0;
+    catchUp().then(() => { openStream(); sayHello(); });
+  });
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && view.screen !== ROOT.screen) { e.preventDefault(); history.back(); }
   });
   document.addEventListener('visibilitychange', onVisibility);
-  wireDrag();
 }
 
 async function main() {

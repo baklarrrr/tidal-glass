@@ -15,8 +15,6 @@
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
 
-/* Opts the page into Neural Band pinch-and-drag (read once at load); used for volume. */
-body { touch-action: none; }
 
 html, body {
   margin: 0;
