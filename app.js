@@ -98,7 +98,9 @@ async function connect() {
     }
   } catch (e) { /* the live stream below still connects */ }
 
+  if (typeof EventSource === 'undefined') { poll(); return; }
   const es = new EventSource(`${SERVER}/${topic}-s/sse`);
+  let failures = 0;
   const onEvent = (e) => {
     try {
       const ev = JSON.parse(e.data);
@@ -106,8 +108,31 @@ async function connect() {
     } catch (err) { /* keepalive or unrelated */ }
   };
   es.addEventListener('message', onEvent);
-  es.addEventListener('open', () => send('hello'));
-  es.onerror = () => { if (!state) $('status').textContent = 'Reconnecting…'; };
+  es.addEventListener('open', () => { failures = 0; send('hello'); });
+  es.onerror = () => {
+    if (!state) $('status').textContent = 'Reconnecting…';
+    // If the live stream keeps failing on this device, fall back to asking every few seconds.
+    if (++failures >= 4) { es.close(); poll(); }
+  };
+}
+
+let polling = false;
+async function poll() {
+  if (polling) return;
+  polling = true;
+  let since = Math.floor(Date.now() / 1000) - 5;
+  send('hello');
+  for (;;) {
+    try {
+      const r = await fetch(`${SERVER}/${topic}-s/json?poll=1&since=${since}`);
+      for (const line of (await r.text()).split('\n')) {
+        if (!line.trim()) continue;
+        const ev = JSON.parse(line);
+        if (ev.event === 'message') { since = ev.id; await handle(ev.message); }
+      }
+    } catch (e) { /* try again next round */ }
+    await new Promise((res) => setTimeout(res, 2500));
+  }
 }
 
 // ---- rendering ---------------------------------------------------------------------------
