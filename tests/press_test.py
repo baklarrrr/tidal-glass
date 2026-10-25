@@ -118,6 +118,16 @@ with sync_playwright() as p:
     c = commands()
     check("a press while offline is sent on reconnect", held == [] and c == ["next"], json.dumps([held, c]))
 
+    # 8b. An older state (a broker that missed updates) never replaces a newer one; a newer one does.
+    titles = page.evaluate("""async s => {
+      const base = state.at;
+      await handle(await seal({...s, ti: 'Older copy', at: base - 5000}));
+      const afterOld = state.ti;
+      await handle(await seal({...s, ti: 'Newer state', at: base + 5000}));
+      return [afterOld, state.ti];
+    }""", STATE)
+    check("older state is ignored, newer state applies", titles == ["Test song", "Newer state"], json.dumps(titles))
+
     # 8. The old link's daily-limit message is gone for good.
     source = page.evaluate("fetch('app.js').then(r => r.text())")
     check("no daily-limit message left", "busy for today" not in source and "ntfy.sh" not in source)

@@ -130,6 +130,9 @@ function openLink() {
       client.subscribe([`bkr/${topic}/s`, `bkr/${topic}/snd`, `bkr/${topic}/lib`], { qos: 1 });
       linkChanged();
       flushOutbox();
+      // Sound settings carry no time, so after any (re)connect ask the phone for the current ones
+      // rather than trust a copy a broker kept.
+      if (APP_MODE === 'sound') askSound(true);
     });
     client.on('message', (t, payload) => handle(new TextDecoder().decode(payload)));
     client.on('offline', linkChanged);
@@ -185,6 +188,8 @@ async function handle(text) {
   lastHeard = Date.now();
   pendingSince = 0;
   if (m.t === 'state') {
+    // A broker that missed some updates can hand over an older copy on connect; keep the newest.
+    if (state && m.at < state.at) return;
     prevState = state;
     state = m;
     if (volPreview != null && !volTimer) volPreview = null;
