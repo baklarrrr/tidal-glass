@@ -19,7 +19,10 @@ const $ = (id) => document.getElementById(id);
 const APP_MODE = new URLSearchParams(location.search).get('app') === 'sound' ? 'sound' : 'tidal';
 const ROOT = APP_MODE === 'sound' ? { screen: 'sound' } : { screen: 'now' };
 // Presses that Tidal answers with a fresh state; anything else must not raise "not answering".
-const EXPECTS_REPLY = new Set(['toggle', 'play', 'pause', 'next', 'prev', 'like', 'volUp', 'volDown', 'volSet', 'skip', 'seek', 'seekBy', 'lib', 'libplay']);
+// The phone answers hello and snd every time, so a phone that stays silent shows as "not answering"
+// instead of its last state passing for live.
+const EXPECTS_REPLY = new Set(['hello', 'snd', 'toggle', 'play', 'pause', 'next', 'prev', 'like', 'volUp', 'volDown', 'volSet', 'skip', 'seek', 'seekBy', 'lib', 'libplay']);
+const RECHECK_MS = 3 * 60 * 1000; // while on screen, ask the phone again this often
 
 let topic = null;
 let key = null;
@@ -208,9 +211,10 @@ async function send(c, extra = {}) {
   const live = links.filter((l) => l.connected);
   if (!live.length) {
     // Not connected this instant (just opened, or the glasses' network is waking): it goes out
-    // the moment a broker connects. The phone ignores a press it has already done.
+    // the moment a broker connects. The phone ignores a press it has already done. A hidden page
+    // never reopens the link; the press waits for the app to come back.
     outbox.push({ body, at: Date.now(), expects });
-    openLink();
+    if (document.visibilityState === 'visible') openLink();
     return true;
   }
   if (expects) pendingSince = Date.now();
@@ -258,8 +262,9 @@ function sayHello() {
   probe.then((extra) => send('hello', extra));
 }
 
-// Battery: while the app is not on screen, drop the live connection and stop every timer. Coming
-// back, the retained state arrives the moment a broker connects.
+// Battery: while the app is not on screen, drop the live connection and stop every timer. Anything a
+// swipe left waiting (a seek, a volume, a sound) goes out first; nothing is repeated while hidden.
+// Coming back, the retained state arrives the moment a broker connects.
 function onVisibility() {
   if (document.visibilityState === 'visible') {
     openLink();
@@ -267,8 +272,23 @@ function onVisibility() {
     startTick();
     renderNow();
   } else {
-    closeLink();
+    clearTimeout(confirmTimer);
+    confirmTimer = 0;
+    if (seekPreview != null) {
+      clearTimeout(seekTimer);
+      const target = seekPreview;
+      seekPreview = null;
+      seekStreak = 0;
+      send('seek', { ms: Math.round(target) });
+    }
+    if (volTimer) {
+      clearTimeout(volTimer);
+      volTimer = 0;
+      send('volSet', { v: volPreview });
+    }
+    if (sndTimer) flushSound();
     stopTick();
+    setTimeout(() => { if (document.visibilityState !== 'visible') closeLink(); }, 400);
   }
 }
 
@@ -316,7 +336,7 @@ const TIPS = {
   voldown: () => 'Volume down',
   volup: () => 'Volume up',
   soundBtn: () => 'Sound Lab: equaliser and speakers',
-  seek: () => 'Swipe left or right to skip',
+  seek: () => 'Swipe left or right to jump 10 s',
 };
 let tipFor = null;
 let tipShow = 0;
@@ -353,19 +373,80 @@ function hasTrack() {
   return !!(state && state.acc && state.ses && state.ti);
 }
 
+// Play pressed with Tidal closed: 'starting' for 15 s, then 'failed' (said in the headline) until 40 s.
+function startPhase() {
+  if (!startingSince || hasTrack()) return '';
+  const t = Date.now() - startingSince;
+  if (t < 15000) return 'starting';
+  if (t < 40000) return 'failed';
+  // Over: back to the closed screen. The press that went unanswered is not a dead phone.
+  startingSince = 0;
+  pendingSince = 0;
+  return '';
+}
+
+// The glasses' battery: the glasses' own browser reading when it has one (on the glasses it matched the
+// phone's report, 47% at 2026-10-25 07:53), else the phone's report (5% steps) while under 30 minutes
+// old. One chip on Now Playing and Sound Lab; charging shows a bolt, not only a colour.
+let browserBattery = null; // { level 0..1, charging } from navigator.getBattery, when it is real
+
+function watchBrowserBattery() {
+  if (!navigator.getBattery) return;
+  navigator.getBattery().then((b) => {
+    const read = () => {
+      // Chromium answers "full, charging, never empties" when it has no battery at all.
+      const unknown = b.level === 1 && b.charging && b.chargingTime === 0 && b.dischargingTime === Infinity;
+      browserBattery = unknown ? null : { level: b.level, charging: b.charging };
+      drawBattery();
+    };
+    read();
+    for (const ev of ['levelchange', 'chargingchange']) b.addEventListener(ev, read);
+  }).catch(() => {});
+}
+
+function drawBattery() {
+  const s = state;
+  let pct = null;
+  let charging = false;
+  if (browserBattery) {
+    pct = Math.round(browserBattery.level * 100);
+    charging = browserBattery.charging;
+  } else if (s && Number.isFinite(s.gb) && Date.now() - (s.at || 0) < 30 * 60 * 1000) {
+    pct = s.gb;
+    charging = !!s.gc;
+  }
+  for (const bat of document.querySelectorAll('[data-gbat]')) {
+    bat.hidden = pct == null;
+    if (pct == null) continue;
+    bat.querySelector('.gbat-text').textContent = `${pct}%`;
+    bat.querySelector('.gbat-fill').setAttribute('width', String(Math.max(1, 13.4 * pct / 100)));
+    bat.classList.toggle('charging', charging);
+    bat.classList.toggle('low', !charging && pct <= 15);
+    bat.setAttribute('aria-label', `Glasses battery ${pct}%${charging ? ', charging' : ''}`);
+  }
+}
+
+function phoneSilent() {
+  return !!(pendingSince && Date.now() - pendingSince > 7000);
+}
+
+// A warning on screen (link down, phone silent, Tidal not starting) keeps the page out of calm.
+function warningShown() {
+  return !!((linkDownSince && Date.now() - linkDownSince > 5000) || phoneSilent() || startPhase() === 'failed'
+    || (typeof mqtt === 'undefined' && mqttTries >= 10 && !window.__testLink));
+}
+
 function stateLine() {
   if (typeof mqtt === 'undefined' && mqttTries >= 10 && !window.__testLink) return 'No link yet: press Back, then Refresh';
   if (!state) return lastHeard ? 'Waiting for your phone…' : 'Connecting to your phone…';
   if (linkDownSince && Date.now() - linkDownSince > 5000) return 'Reconnecting…';
-  if (startingSince && !hasTrack()) {
-    const t = Date.now() - startingSince;
-    if (t < 15000) return 'Starting Tidal…';
-    if (t < 40000) return "Tidal didn't start: open it on your phone once";
-    startingSince = 0;
-  }
-  if (pendingSince && Date.now() - pendingSince > 7000) return 'Your phone is not answering';
+  const phase = startPhase();
+  if (phase === 'starting') return state.ses ? 'Asking Tidal to play…' : 'Starting Tidal…';
+  if (phase === 'failed') return 'Phone connected';
+  if (phoneSilent()) return 'Your phone is not answering';
   if (!state.acc) return 'Phone needs notification access';
-  if (!hasTrack()) return state.ses ? 'Tidal is idle' : 'Tidal is closed';
+  // The headline already says what Tidal is doing; this line is about the link.
+  if (!hasTrack()) return 'Phone connected';
   if (state.buf) return 'Buffering…';
   return state.play ? 'Playing' : 'Paused';
 }
@@ -375,31 +456,24 @@ function renderNow() {
   const track = hasTrack();
 
   $('stateText').textContent = stateLine();
-  $('dot').classList.toggle('live', !!(track && s.play && !s.buf));
+  $('dot').classList.toggle('live', !!(track && s.play && !s.buf && !phoneSilent()));
   $('atmos').hidden = !(track && s.atmos);
   $('explicit').hidden = !(track && s.ex);
   const { cur } = volParts();
   $('vol').hidden = cur == null;
-  // Glasses battery, as Meta's toolkit reports it to the phone (5% steps), on Now Playing and Sound Lab.
-  const gb = s && Number.isFinite(s.gb) ? s.gb : null;
-  for (const bat of document.querySelectorAll('[data-gbat]')) {
-    bat.hidden = gb == null;
-    if (gb == null) continue;
-    bat.querySelector('.gbat-text').textContent = `${gb}%`;
-    bat.querySelector('.gbat-fill').setAttribute('width', String(Math.max(1, 13.4 * gb / 100)));
-    bat.classList.toggle('charging', !!s.gc);
-    bat.classList.toggle('low', !s.gc && gb <= 15);
-    bat.setAttribute('aria-label', `Glasses battery ${gb}%${s.gc ? ', charging' : ''}`);
-  }
+  drawBattery();
   $('volText').textContent = volPreview != null ? String(volPreview) : (cur == null ? '' : String(cur));
 
-  // Tidal closed on the phone is not a dead end: Play starts it where it left off.
+  // Tidal closed on the phone is not a dead end: Play starts it where it left off. If it does not
+  // start, the headline says so and what to do.
   const closed = !!(s && s.acc && !s.ses);
+  const failed = startPhase() === 'failed';
   $('title').textContent = track ? s.ti
-    : (s && !s.acc ? 'Needs access' : (closed ? 'Tidal is closed' : (s ? 'Nothing playing' : 'Tidal Glass')));
+    : (s && !s.acc ? 'Needs access' : failed ? "Tidal didn't start" : (closed ? 'Tidal is closed' : (s ? 'Nothing playing' : 'Tidal Glass')));
   $('artist').textContent = track ? (s.ar || '') : (s && !s.acc
     ? 'Open Tidal Glass on your phone and allow notification access.'
-    : (closed ? 'Press Play to start it where you left off.' : 'Press Play, or pick something from your library.'));
+    : failed ? 'Open Tidal on your phone, then press Play.'
+      : (closed ? 'Press Play to start it where you left off.' : 'Press Play, or pick something from your library.'));
   $('album').textContent = track ? (s.al || '') : '';
 
   const wrap = $('artwrap');
@@ -478,8 +552,11 @@ function wakeUp() {
 }
 
 function checkCalm() {
-  document.body.classList.toggle('calm', view.screen === 'now' && Date.now() - lastInputAt > CALM_AFTER);
+  // Never while a warning is showing: it must stay readable.
+  document.body.classList.toggle('calm', view.screen === 'now' && Date.now() - lastInputAt > CALM_AFTER && !warningShown());
 }
+
+let lastPhase = '';
 
 function startTick() {
   stopTick();
@@ -487,7 +564,15 @@ function startTick() {
     // Only the clock moves; when paused or idle there is nothing to redraw.
     if (view.screen === 'now' && state && state.play) tick();
     $('stateText').textContent = stateLine();
-    if (view.screen === 'sound') renderSoundStatus();
+    if (view.screen === 'sound' || view.screen === 'bands' || view.screen === 'slots') renderSoundStatus();
+    // A failed Tidal start changes the headline, not only this line.
+    const phase = startPhase();
+    if (phase !== lastPhase) { lastPhase = phase; renderNow(); }
+    // While on screen, ask the phone again now and then, so a phone that has gone silent says so.
+    if (Date.now() - lastHello > RECHECK_MS) {
+      lastHello = 0;
+      if (APP_MODE === 'sound') askSound(true); else sayHello();
+    }
     checkCalm();
   }, 1000);
 }
@@ -766,6 +851,11 @@ function askSound(force) {
 function receiveSound(m) {
   // A broker that missed some updates can hand over an older copy on connect; keep the newest.
   if (snd && m.at && snd.at && m.at < snd.at) return;
+  if (sndPending && sndPending.check(m)) {
+    const done = sndPending.done;
+    sndPending = null;
+    if (done) soundNote(done);
+  }
   const local = snd && snd.s;
   const keepLocal = local && !sndLoading && (sndTimer || Date.now() - sndEditAt < 3000);
   snd = m;
@@ -773,7 +863,6 @@ function receiveSound(m) {
   if (keepLocal) snd.s = local;
   if (!Array.isArray(snd.s.bands)) snd.s.bands = Array(BAND_COUNT).fill(0);
   if (sndLoading) {
-    showToast(`Sound ${sndLoading} loaded`);
     sndLoading = 0;
     if (view.screen === 'slots') history.back();
   }
@@ -888,7 +977,7 @@ function buildSound() {
     } else if (e.key === 'Enter') {
       e.preventDefault();
       if (row.id === 'srow-preset') stepPreset(1);
-      else showToast('Swipe left or right to change it');
+      else soundNote('Swipe left or right to change it');
     }
   });
   preset.addEventListener('click', (e) => { if (e.detail && snd) stepPreset(1); });
@@ -897,14 +986,16 @@ function buildSound() {
   $('sndSlots').addEventListener('click', () => { if (snd) openSub('slots', 'sndSlots'); });
   $('sndTest').addEventListener('click', () => {
     send('sndTest', { side: 'lr' });
-    showToast('Left speaker, then right');
+    soundNote('Left speaker, then right');
   });
   $('sndReset').addEventListener('click', () => {
     if (!snd) return;
     confirmTwice($('sndReset'), 'Pinch again to reset', () => {
       Object.assign(snd.s, { preset: 'Flat', bass: 0, mids: 0, treble: 0, clarity: 0, loud: 0, bal: 0, bands: Array(BAND_COUNT).fill(0) });
       soundChanged();
-      showToast('Back to flat');
+      flushSound();
+      expectSound('Going back to flat…', (m) => m.s && m.s.preset === 'Flat', 'Back to flat');
+      setTimeout(() => send('snd'), 600); // the phone answers with what it now plays
     });
   });
   $('sndPower').addEventListener('click', () => {
@@ -912,6 +1003,9 @@ function buildSound() {
     snd.s.on = !snd.s.on;
     soundChanged();
     flushSound(); // on/off is for comparing, so it goes at once; the button and status say which
+    const want = snd.s.on;
+    expectSound(want ? 'Turning on…' : 'Turning off…', (m) => m.s && m.s.on === want);
+    setTimeout(() => send('snd'), 600); // the phone answers with what it now plays
   });
 
   const freqs = $('freqs');
@@ -952,14 +1046,40 @@ function openSound() {
   target.focus();
 }
 
+// Sound Lab says things in its own header line, never in a message over the controls (on the
+// see-through display overlapping text cannot be read).
+let sndNote = null;    // { text, until }
+let sndPending = null; // { doing, check(m), at }: sent, waiting for the phone's sound report to confirm
+
+function soundNote(text, ms = 2500) {
+  sndNote = { text, until: Date.now() + ms };
+  renderSoundStatus();
+  setTimeout(renderSoundStatus, ms + 50);
+}
+
+// Said in the header until the phone's next sound report confirms it; after 7 s without one, says so.
+function expectSound(doing, check, done) {
+  sndPending = { doing, check, done, at: Date.now() };
+  renderSoundStatus();
+}
+
 function renderSoundStatus() {
   let text;
   let live = false;
-  if (!snd) text = sndAsked && Date.now() - sndAsked > 7000 ? 'Your phone is not answering' : 'Asking your phone…';
+  if (sndNote && Date.now() < sndNote.until) text = sndNote.text;
+  else if (sndPending) {
+    text = Date.now() - sndPending.at < 7000 ? sndPending.doing : 'Your phone did not confirm. Try again.';
+    if (Date.now() - sndPending.at > 12000) sndPending = null;
+  } else if (linkDownSince && Date.now() - linkDownSince > 5000) text = 'Reconnecting…';
+  else if (!snd) text = sndAsked && Date.now() - sndAsked > 7000 ? 'Your phone is not answering' : 'Asking your phone…';
+  else if (phoneSilent()) text = 'Your phone is not answering';
   else if (!snd.s.on) text = 'Off · Tidal plays as normal';
   else { text = snd.status || ''; live = !!snd.active; }
   $('sndStateText').textContent = text;
   $('sndDot').classList.toggle('live', live);
+  // Fine-tune and My sounds keep their hint in the same place, and show notes and confirmations there.
+  const busy = (sndNote && Date.now() < sndNote.until) || sndPending;
+  for (const id of ['bandsState', 'slotsState']) $(id).textContent = busy ? text : $(id).dataset.default;
 }
 
 function renderSound() {
@@ -1057,7 +1177,7 @@ function openBands() {
         if (next !== snd.s.bands[i]) { snd.s.bands[i] = next; soundChanged(); }
       } else if (e.key === 'Enter') {
         e.preventDefault();
-        showToast('Swipe up or down to change this band');
+        soundNote('Swipe up or down to change this band');
       }
     });
   }
@@ -1114,14 +1234,14 @@ function renderSlots(keepFocus) {
       dropPendingSound(); // the loaded sound replaces any unsent adjustment
       sndLoading = sl.n;
       send('sndLoad', { n: sl.n });
-      showToast(`Loading Sound ${sl.n}…`);
+      expectSound(`Loading Sound ${sl.n}…`, () => true, `Sound ${sl.n} loaded`);
     });
     save.addEventListener('click', () => {
       const store = () => {
         // The sound travels with the save, so the two can never arrive out of order.
         dropPendingSound();
         send('sndSave', { n: sl.n, s: snd.s });
-        showToast(`Saved as Sound ${sl.n}`);
+        expectSound(`Saving to Sound ${sl.n}…`, (m) => !!(m.slots && m.slots[sl.n - 1] && m.slots[sl.n - 1].label), `Saved as Sound ${sl.n}`);
       };
       if (sl.label) confirmTwice(save, 'Replace?', store);
       else store();
@@ -1244,6 +1364,7 @@ function wire() {
   // Any swipe or pinch wakes the page from calm before anything else handles it.
   document.addEventListener('keydown', wakeUp, true);
   document.addEventListener('pointerdown', wakeUp, true);
+  document.addEventListener('click', wakeUp, true);
   $('toggle').addEventListener('click', () => press(state && state.play ? 'pause' : 'play'));
   $('prev').addEventListener('click', () => press('prev'));
   $('next').addEventListener('click', () => press('next'));
@@ -1317,6 +1438,7 @@ async function main() {
     focusDefault();
     registerVoiceTools();
   }
+  watchBrowserBattery();
   registerServiceWorker();
   if (document.visibilityState === 'visible') { openLink(); sayHello(); startTick(); }
 }

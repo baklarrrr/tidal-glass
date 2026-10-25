@@ -56,6 +56,9 @@ svg { fill: currentColor; }
 .gbat svg { inline-size: 18px; block-size: 18px; }
 .gbat.low { color: #ffb08a; }
 .gbat.charging { color: var(--accent); }
+/* Charging also shows a bolt, so it never depends on colour alone. */
+.gbat .gbat-bolt { display: none; }
+.gbat.charging .gbat-bolt { display: inline; }
 .vol svg { inline-size: 15px; block-size: 15px; }
 
 /* ---- track ------------------------------------------------------------------------------- */
@@ -235,6 +238,7 @@ body.calm .album, body.calm .topline, body.calm .seek .times { opacity: 0.6; }
 body.calm .row button, body.calm .row.main .primary { border-color: rgba(255, 255, 255, 0.16); color: var(--dim); }
 body.calm button:focus, body.calm .row.main .primary:focus { background: transparent; border-color: rgba(47, 216, 236, 0.45); box-shadow: none; }
 body.calm .seek .fill { background: var(--dim); }
+body.calm #like[aria-pressed="true"] { color: var(--dim); border-color: rgba(255, 255, 255, 0.16); }
 
 @media (prefers-reduced-motion: no-preference) {
   button, .seek { transition: box-shadow 140ms ease, background-color 140ms ease, border-color 140ms ease, transform 90ms ease; }

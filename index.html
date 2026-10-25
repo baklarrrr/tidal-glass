@@ -22,7 +22,7 @@
           <span id="explicit" class="badge square" title="Explicit" hidden>E</span>
         </span>
         <span id="gbat" class="gbat" data-gbat hidden aria-label="Glasses battery">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2.5" y="7" width="17" height="10" rx="2.2" fill="none" stroke="currentColor" stroke-width="1.8"/><rect x="20.2" y="10" width="1.8" height="4" rx=".6"/><rect class="gbat-fill" x="4.3" y="8.8" width="13.4" height="6.4" rx="1"/></svg><span class="gbat-text"></span>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2.5" y="7" width="17" height="10" rx="2.2" fill="none" stroke="currentColor" stroke-width="1.8"/><rect x="20.2" y="10" width="1.8" height="4" rx=".6"/><rect class="gbat-fill" x="4.3" y="8.8" width="13.4" height="6.4" rx="1"/><path class="gbat-bolt" d="M12.6 7.4 8.4 12.6h2.9l-1 4 4.3-5.4h-2.9z" fill="#000" stroke="#000" stroke-width="1.6" stroke-linejoin="round"/><path class="gbat-bolt" d="M12.6 7.4 8.4 12.6h2.9l-1 4 4.3-5.4h-2.9z"/></svg><span class="gbat-text"></span>
         </span>
         <span id="vol" class="vol" hidden>
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9h4l5-4v14l-5-4H4z"/></svg><span id="volText"></span>
@@ -106,7 +106,7 @@
         <h2 id="soundTitle">Sound Lab</h2>
         <span class="state"><span id="sndDot" class="dot" aria-hidden="true"></span><span id="sndStateText">Asking your phone…</span></span>
         <span class="gbat" data-gbat hidden aria-label="Glasses battery">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2.5" y="7" width="17" height="10" rx="2.2" fill="none" stroke="currentColor" stroke-width="1.8"/><rect x="20.2" y="10" width="1.8" height="4" rx=".6"/><rect class="gbat-fill" x="4.3" y="8.8" width="13.4" height="6.4" rx="1"/></svg><span class="gbat-text"></span>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2.5" y="7" width="17" height="10" rx="2.2" fill="none" stroke="currentColor" stroke-width="1.8"/><rect x="20.2" y="10" width="1.8" height="4" rx=".6"/><rect class="gbat-fill" x="4.3" y="8.8" width="13.4" height="6.4" rx="1"/><path class="gbat-bolt" d="M12.6 7.4 8.4 12.6h2.9l-1 4 4.3-5.4h-2.9z" fill="#000" stroke="#000" stroke-width="1.6" stroke-linejoin="round"/><path class="gbat-bolt" d="M12.6 7.4 8.4 12.6h2.9l-1 4 4.3-5.4h-2.9z"/></svg><span class="gbat-text"></span>
         </span>
         <button id="sndPower" class="pill-btn power" aria-pressed="true"><span>On</span></button>
       </header>
@@ -125,7 +125,7 @@
     <section id="bands" class="screen sound" aria-labelledby="bandsTitle" hidden>
       <header class="soundhead">
         <h2 id="bandsTitle">Fine-tune</h2>
-        <span class="state hint">Swipe up or down to change a band</span>
+        <span id="bandsState" class="state hint" data-default="Swipe up or down to change a band">Swipe up or down to change a band</span>
       </header>
       <div id="bandCols" class="bandcols"></div>
     </section>
@@ -133,7 +133,7 @@
     <section id="slots" class="screen sound" aria-labelledby="slotsTitle" hidden>
       <header class="soundhead">
         <h2 id="slotsTitle">My sounds</h2>
-        <span class="state hint">Saved on your phone</span>
+        <span id="slotsState" class="state hint" data-default="Saved on your phone">Saved on your phone</span>
       </header>
       <ol id="slotList" class="slotlist"></ol>
     </section>

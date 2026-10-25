@@ -156,6 +156,81 @@ with sync_playwright() as p:
     c = commands()
     check("calm after 15 s; a pinch wakes it and still pauses", calm and not woke and c == ["pause"], json.dumps([calm, woke, c]))
 
+    # 11. A silent phone is not shown as live (Director review, 2026-10-25, R2).
+    page.evaluate("s => { state = {...s, play: true, at: Date.now()}; renderNow(); }", STATE)
+    page.evaluate("pendingSince = Date.now() - 8000; renderNow();")
+    silent = page.evaluate("[stateLine(), $('dot').classList.contains('live')]")
+    page.evaluate("pendingSince = 0; renderNow();")
+    check("a phone that does not answer says so and the live dot goes out", silent == ["Your phone is not answering", False], json.dumps(silent))
+
+    # 12. Tidal does not start: the headline says so; after 40 s back to closed, never "not answering" (R1).
+    page.evaluate("s => { state = {t: 'state', acc: true, ses: false, play: false, buf: false, pos: 0, at: Date.now(), vol: s.vol, q: [], qa: -1}; startingSince = Date.now() - 20000; pendingSince = Date.now() - 20000; renderNow(); }", STATE)
+    failed = page.evaluate("[$('title').textContent, $('artist').textContent, stateLine()]")
+    page.evaluate("startingSince = Date.now() - 41000; stateLine(); renderNow();")
+    after40 = page.evaluate("[$('title').textContent, stateLine(), pendingSince]")
+    check("a failed start is in the headline, then clears without a false 'not answering'",
+          failed[0] == "Tidal didn't start" and "then press Play" in failed[1] and failed[2] == "Phone connected"
+          and after40 == ["Tidal is closed", "Phone connected", 0], json.dumps([failed, after40]))
+
+    # 13. Calm never dims a warning (R11).
+    page.evaluate("s => { state = {...s, play: true, at: Date.now()}; startingSince = 0; renderNow(); }", STATE)
+    page.evaluate("pendingSince = Date.now() - 8000; lastInputAt = Date.now() - 20000; checkCalm();")
+    calm_on_warning = page.evaluate("document.body.classList.contains('calm')")
+    page.evaluate("pendingSince = 0; checkCalm();")
+    check("calm stays off while a warning shows", calm_on_warning is False, json.dumps(calm_on_warning))
+    page.evaluate("wakeUp()")
+
+    # 14. Hidden: a press waits; the link is not reopened behind the wearer's back (R4).
+    reset()
+    page.evaluate("Object.defineProperty(document, 'visibilityState', {configurable: true, get: () => 'hidden'}); document.dispatchEvent(new Event('visibilitychange'));")
+    page.wait_for_timeout(600)
+    page.evaluate("send('next')")
+    page.wait_for_timeout(300)
+    hidden = page.evaluate("[links.length, outbox.length, window.__sent.length]")
+    page.evaluate("Object.defineProperty(document, 'visibilityState', {configurable: true, get: () => 'visible'}); document.dispatchEvent(new Event('visibilitychange'));")
+    page.wait_for_timeout(300)
+    shown_again = commands()
+    check("hidden: no reopen, the press waits and goes out when shown", hidden == [0, 1, 0] and "next" in shown_again, json.dumps([hidden, shown_again]))
+
+    # 15. Battery: the glasses' own reading first, a bolt when charging, an old phone report hidden (R5).
+    page.evaluate("browserBattery = {level: 0.62, charging: true}; drawBattery();")
+    own = page.evaluate("(() => { const b = document.querySelector('#gbat'); return [b.hidden, b.textContent.trim(), getComputedStyle(b.querySelector('.gbat-bolt')).display]; })()")
+    page.evaluate("s => { browserBattery = null; state = {...s, gb: 40, at: Date.now() - 31 * 60 * 1000}; drawBattery(); }", STATE)
+    old = page.evaluate("document.querySelector('#gbat').hidden")
+    check("battery: own reading with a bolt; a phone report over 30 min old is hidden",
+          own[0] is False and own[1] == "62%" and own[2] != "none" and old is True, json.dumps([own, old]))
+
+    # 16. Sound Lab (Director review R8-R10): actions wait for the phone, notes stay in the header.
+    sp = browser.new_context(viewport={"width": 600, "height": 600}).new_page()
+    sp.on("pageerror", lambda e: errors.append(str(e)))
+    sp.add_init_script("window.__sent = []; window.__testLink = { connected: true, publish(t, body) { window.__sent.push(body); }, end() {} };")
+    sp.goto(URL.replace("index.html?test=1", "index.html?app=sound&test=1"))
+    sp.wait_for_function("typeof key !== 'undefined' && key !== null")
+    SND = {"t": "snd", "at": 1, "s": {"on": True, "preset": "Open-ear", "bass": 2, "mids": 0, "treble": 1, "clarity": 3, "loud": 2, "bal": 0, "bands": [0] * 10},
+           "presets": {"Flat": [0] * 10, "Open-ear": [3, 3, 2, 1, 0, 0, 1, 2, 2, 1]}, "status": "Shaping Tidal", "active": True, "w": {},
+           "slots": [{"n": 1, "label": ""}, {"n": 2, "label": ""}, {"n": 3, "label": ""}]}
+    sp.evaluate("async m => { await handle(await seal(m)); }", SND)
+    sp.wait_for_timeout(200)
+    sp.focus("#sndPower")
+    sp.keyboard.press("Enter")
+    sp.wait_for_timeout(100)
+    turning = sp.evaluate("$('sndStateText').textContent")
+    sp.evaluate("async m => { await handle(await seal({...m, at: 2, s: {...m.s, on: false}, status: 'Off'})); }", SND)
+    sp.wait_for_timeout(100)
+    confirmed = sp.evaluate("$('sndStateText').textContent")
+    check("Sound Lab Off: 'Turning off…' until the phone confirms", turning == "Turning off…" and confirmed == "Off · Tidal plays as normal", json.dumps([turning, confirmed]))
+    sp.evaluate("expectSound('Saving to Sound 1…', () => false); sndPending.at = Date.now() - 8000; renderSoundStatus();")
+    late = sp.evaluate("$('sndStateText').textContent")
+    sp.evaluate("sndPending = null; renderSoundStatus();")
+    check("Sound Lab: no confirmation in 7 s says so", late == "Your phone did not confirm. Try again.", json.dumps(late))
+    sp.evaluate("soundNote('Back to flat')")
+    note = sp.evaluate("[$('sndStateText').textContent, $('toast').hidden]")
+    check("Sound Lab notes sit in the header, not over the controls", note == ["Back to flat", True], json.dumps(note))
+    sp.evaluate("sndNote = null; linkDownSince = Date.now() - 6000; renderSoundStatus();")
+    recon = sp.evaluate("$('sndStateText').textContent")
+    check("Sound Lab says Reconnecting… when the link is down", recon == "Reconnecting…", json.dumps(recon))
+    sp.close()
+
     # 8. The old link's daily-limit message is gone for good.
     source = page.evaluate("fetch('app.js').then(r => r.text())")
     check("no daily-limit message left", "busy for today" not in source and "ntfy.sh" not in source)
