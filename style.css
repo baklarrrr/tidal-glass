@@ -101,14 +101,15 @@ button:focus {
 #items button {
   inline-size: 100%;
   display: grid;
-  grid-template-columns: 28px 1fr;
-  align-items: center;
+  grid-template-columns: 28px minmax(0, 1fr);
+  place-items: center start;
   gap: 12px;
   text-align: start;
   border-radius: 16px;
-  padding: 9px 16px;
+  padding: 10px 18px;
 }
-#items button svg { inline-size: 22px; block-size: 22px; }
+#items button > span { inline-size: 100%; min-inline-size: 0; }
+#items button svg { inline-size: 26px; block-size: 26px; }
 #items .ti { font-size: 20px; line-height: 1.2; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; }
 #items .su { font-size: 15px; color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; }
 #items .current { color: var(--focus); }
