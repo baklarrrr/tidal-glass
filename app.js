@@ -380,13 +380,13 @@ function renderNow() {
   $('explicit').hidden = !(track && s.ex);
   const { cur } = volParts();
   $('vol').hidden = cur == null;
-  // Glasses battery, as Meta's toolkit reports it to the phone (5% steps).
+  // Glasses battery, as Meta's toolkit reports it to the phone (5% steps), on Now Playing and Sound Lab.
   const gb = s && Number.isFinite(s.gb) ? s.gb : null;
-  const bat = $('gbat');
-  bat.hidden = gb == null;
-  if (gb != null) {
-    $('gbatText').textContent = `${gb}%`;
-    $('gbatFill').setAttribute('width', String(Math.max(1, 13.4 * gb / 100)));
+  for (const bat of document.querySelectorAll('[data-gbat]')) {
+    bat.hidden = gb == null;
+    if (gb == null) continue;
+    bat.querySelector('.gbat-text').textContent = `${gb}%`;
+    bat.querySelector('.gbat-fill').setAttribute('width', String(Math.max(1, 13.4 * gb / 100)));
     bat.classList.toggle('charging', !!s.gc);
     bat.classList.toggle('low', !s.gc && gb <= 15);
     bat.setAttribute('aria-label', `Glasses battery ${gb}%${s.gc ? ', charging' : ''}`);
