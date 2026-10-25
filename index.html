@@ -81,8 +81,12 @@
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 9h4l5-4v14l-5-4H3zm14.5-1h2v3h3v2h-3v3h-2v-3h-3v-2h3z"/></svg>
         </button>
       </div>
-      <!-- Names the focused button for a moment after focus moves, then fades. -->
-      <p id="tip" class="tip" aria-hidden="true"></p>
+      <!-- One reserved line under the controls: the focused button's name for a moment after focus moves,
+           or a short confirmation (volume, a new song, My Collection). Never a message on top of other text. -->
+      <div class="nameline">
+        <p id="tip" class="tip" aria-hidden="true"></p>
+        <p id="notice" class="notice" role="status" aria-live="polite"></p>
+      </div>
     </section>
 
     <section id="list" class="screen" aria-labelledby="listTitle" hidden>
@@ -91,7 +95,7 @@
         <h2 id="listTitle" tabindex="-1">Library</h2>
       </header>
       <p id="listNote" class="note"></p>
-      <ol id="items"></ol>
+      <ol id="items" tabindex="-1"></ol>
       <div class="row small listnav">
         <button id="more" class="pill-btn" hidden><span>More</span>
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
@@ -100,26 +104,42 @@
     </section>
 
     <!-- Sound Lab: shapes Tidal's audio on the phone before it reaches the glasses' speakers.
-         Swipe up/down to pick a control, left/right to change it; everything is heard live. -->
+         Swipe up/down to pick a control, left/right to change it; everything is heard live. The actions
+         sit right above Preset, one swipe up from where Sound Lab opens. -->
     <section id="sound" class="screen sound" aria-labelledby="soundTitle" hidden>
       <header class="soundhead">
-        <h2 id="soundTitle">Sound Lab</h2>
-        <span class="state"><span id="sndDot" class="dot" aria-hidden="true"></span><span id="sndStateText">Asking your phone…</span></span>
+        <h2 id="soundTitle" tabindex="-1">Sound Lab</h2>
+        <span id="sndState" class="state"><span id="sndDot" class="dot" aria-hidden="true"></span><span id="sndStateText">Asking your phone…</span></span>
         <span class="gbat" data-gbat hidden aria-label="Glasses battery">
           <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2.5" y="7" width="17" height="10" rx="2.2" fill="none" stroke="currentColor" stroke-width="1.8"/><rect x="20.2" y="10" width="1.8" height="4" rx=".6"/><rect class="gbat-fill" x="4.3" y="8.8" width="13.4" height="6.4" rx="1"/><path class="gbat-bolt" d="M12.6 7.4 8.4 12.6h2.9l-1 4 4.3-5.4h-2.9z" fill="#000" stroke="#000" stroke-width="1.6" stroke-linejoin="round"/><path class="gbat-bolt" d="M12.6 7.4 8.4 12.6h2.9l-1 4 4.3-5.4h-2.9z"/></svg><span class="gbat-text"></span>
         </span>
-        <button id="sndPower" class="pill-btn power" aria-pressed="true"><span>On</span></button>
       </header>
       <div class="curvebox" aria-hidden="true">
-        <svg id="curve" class="curve" viewBox="0 0 540 112">
-          <line class="zero" x1="0" y1="56" x2="540" y2="56"/>
+        <svg id="curve" class="curve" viewBox="0 0 540 96">
+          <line class="zero" x1="0" y1="48" x2="540" y2="48"/>
           <path id="curveFill" class="curve-fill" d=""/>
           <path id="curveLine" class="curve-line" d=""/>
           <g id="curveDots"></g>
         </svg>
         <div id="freqs" class="freqs"></div>
       </div>
-      <div id="sndRows" class="sndrows"></div>
+      <div class="sndtools">
+        <!-- The switch shows whether Sound Lab is shaping Tidal; a pinch flips it, for comparing. -->
+        <button id="sndPower" class="pill-btn power is-on" aria-pressed="true">
+          <svg class="switch" viewBox="0 0 30 18" aria-hidden="true"><rect class="sw-track" x="1" y="1" width="28" height="16" rx="8"/><circle class="sw-knob" cx="21" cy="9" r="5"/></svg>
+          <span>On</span>
+        </button>
+        <button id="sndFine" class="pill-btn"><span>Fine-tune</span></button>
+        <button id="sndSlots" class="pill-btn"><span>My sounds</span></button>
+        <button id="sndTest" class="pill-btn"><span>Test speakers</span></button>
+        <button id="sndReset" class="pill-btn"><span>Reset</span></button>
+      </div>
+      <div id="sndRows" class="sndrows" tabindex="-1"></div>
+      <!-- Until the phone has sent its sound there is nothing true to draw, so nothing is drawn. -->
+      <div id="sndEmpty" class="sndempty">
+        <p class="big">No sound settings yet</p>
+        <p class="small">They come from Tidal Glass on your phone. If nothing appears, open it there.</p>
+      </div>
     </section>
 
     <section id="bands" class="screen sound" aria-labelledby="bandsTitle" hidden>
@@ -144,8 +164,6 @@
       <p class="artist">Not paired with your phone yet.</p>
       <p class="album">Open Tidal Glass on your phone and tap “Put Tidal on my glasses”.</p>
     </section>
-
-    <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
   </main>
   <script src="vendor/mqtt.min.js"></script>
   <script src="app.js"></script>

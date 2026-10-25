@@ -1,7 +1,10 @@
 /* Tidal Glass on Meta Ray-Ban Display.
    The display is additive: black adds no light and reads as see-through, so the page stays black and
    only type, icons, hairlines and the focus glow are lit. Nothing animates on its own, which keeps the
-   panel (and the battery) quiet; motion is only feedback for a press or a focus change. */
+   panel (and the battery) quiet; motion is only feedback for a press or a focus change.
+   Colour roles: a cyan ring (with its glow) means focus and nothing else. Every control rests on the
+   same white hairline. A state that is on (liked, Sound Lab shaping, playing live, charging) shows as
+   a cyan icon or text, never as a ring. Amber is the low battery only. */
 :root {
   --ink: #ffffff;
   --soft: #d5dbe2;
@@ -10,6 +13,8 @@
   --accent: #2fd8ec;
   --accent-soft: rgba(47, 216, 236, 0.2);
   --glow: 0 0 0 3px var(--accent), 0 0 16px rgba(47, 216, 236, 0.55);
+  /* Scrolling lists fade out at their edges, so a row half out of view never shows as a hard sliver. */
+  --edge-fade: linear-gradient(to bottom, transparent 0, transparent 4px, #000 12px, #000 calc(100% - 12px), transparent calc(100% - 4px));
 }
 
 * { box-sizing: border-box; }
@@ -85,7 +90,8 @@ p { margin: 0; }
 .album { font-size: 15px; line-height: 1.25; color: var(--dim); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 
 /* ---- seek ------------------------------------------------------------------------------- */
-.seek { padding: 8px 2px 0; border-radius: 12px; outline: none; }
+/* The padding keeps the focus ring clear of the times; the negative margin keeps the bar where it was. */
+.seek { padding: 9px 14px 8px; margin: -1px -12px -8px; border-radius: 14px; outline: none; }
 .seek .line { position: relative; block-size: 4px; border-radius: 2px; background: rgba(255, 255, 255, 0.24); }
 .seek .fill { position: absolute; inset-block: 0; inset-inline-start: 0; inline-size: 0; border-radius: 2px; background: var(--ink); }
 .seek .knob {
@@ -111,21 +117,29 @@ button {
 .round { border-radius: 50%; }
 .row.main .round { inline-size: 86px; block-size: 86px; }
 .row.main .round svg { inline-size: 36px; block-size: 36px; }
-.row.main .primary { inline-size: 112px; block-size: 112px; border: 3px solid var(--ink); }
+/* Play/Pause is marked by its size; its ring is the same hairline as the others, so the only strong
+   ring on screen is the focus. */
+.row.main .primary { inline-size: 112px; block-size: 112px; }
 .row.main .primary svg { inline-size: 50px; block-size: 50px; }
 .row.small .round { inline-size: 66px; block-size: 66px; }
 .row.small .round svg { inline-size: 28px; block-size: 28px; }
 
 button:focus { border-color: var(--accent); background: var(--accent-soft); box-shadow: var(--glow); }
 button:active { transform: scale(0.94); }
-#like[aria-pressed="true"] { color: var(--accent); border-color: rgba(47, 216, 236, 0.7); }
+/* Liked: a filled cyan heart. The ring stays the hairline, so it never looks focused. */
+#like[aria-pressed="true"] { color: var(--accent); }
+#like[aria-pressed="true"]:focus { color: var(--ink); }
 
-/* Additive display: a label cannot cover what is behind it, so it gets its own reserved line. */
-.tip {
-  margin-block-start: -6px; min-block-size: 24px; text-align: center;
-  font-size: 19px; font-weight: 650; letter-spacing: 0.01em; color: var(--accent); opacity: 0;
+/* Additive display: a label cannot cover what is behind it, so names and confirmations share one
+   reserved line, one at a time, cut with "…" rather than wrapped. */
+.nameline { display: grid; margin-block-start: -6px; min-block-size: 24px; }
+.nameline > p {
+  grid-area: 1 / 1; min-inline-size: 0; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  font-size: 19px; font-weight: 650; letter-spacing: 0.01em; opacity: 0;
 }
-.tip.on { opacity: 1; }
+.tip { color: var(--accent); }
+.notice { color: var(--ink); }
+.tip.on, .notice.on { opacity: 1; }
 
 .pill-btn { border-radius: 999px; padding: 0 22px 0 16px; block-size: 56px; display: inline-flex; align-items: center; gap: 8px; font-size: 19px; }
 .pill-btn svg { inline-size: 22px; block-size: 22px; fill: none; stroke: currentColor; stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; }
@@ -136,7 +150,14 @@ button:active { transform: scale(0.94); }
 .crumb { font-size: 14px; color: var(--dim); letter-spacing: 0.02em; min-block-size: 17px; }
 .note { font-size: 17px; color: var(--soft); }
 .note:empty { display: none; }
-#items { list-style: none; margin: 0; padding: 2px 4px; display: flex; flex-direction: column; gap: 9px; min-block-size: 0; overflow: auto; scrollbar-width: none; }
+/* Scrolling lists keep 14 px inside their edges, so a focused row's ring and glow are never cut flat;
+   the edges fade, so a row half out of view never shows as a stray sliver. The negative margin keeps
+   the rows where they were; the room after the last row lets the list end with whole rows on top. */
+#items {
+  list-style: none; margin: -12px -12px; padding: 14px 16px 90px; display: flex; flex-direction: column; gap: 9px;
+  min-block-size: 0; overflow: auto; scrollbar-width: none; outline: none;
+  -webkit-mask-image: var(--edge-fade); mask-image: var(--edge-fade);
+}
 #items::-webkit-scrollbar { display: none; }
 #items button {
   inline-size: 100%; display: grid; grid-template-columns: 30px minmax(0, 1fr) 18px; place-items: center start;
@@ -150,7 +171,7 @@ button:active { transform: scale(0.94); }
 #items .current .ti, #items .current > svg { color: var(--accent); }
 .listnav { margin-top: auto; }
 .listnav:not(:has(button:not([hidden]))) { display: none; }
-#listTitle:focus { outline: none; }
+#listTitle:focus, #soundTitle:focus { outline: none; }
 
 /* ---- Sound Lab -------------------------------------------------------------------------- */
 .screen.sound { gap: 10px; padding: 20px 30px 18px; }
@@ -158,12 +179,33 @@ button:active { transform: scale(0.94); }
 .soundhead h2 { font-size: 26px; flex: none; -webkit-line-clamp: 1; }
 .soundhead .state { font-size: 15px; color: var(--dim); }
 .soundhead .hint { justify-content: flex-end; }
-.power { block-size: 44px; font-size: 17px; padding: 0 20px; flex: none; }
-.power[aria-pressed="true"] { color: var(--accent); border-color: rgba(47, 216, 236, 0.7); }
-.sound.off .curvebox, .sound.off .srow, .sound.waiting .curvebox, .sound.waiting .srow { opacity: 0.45; }
+/* Off: what is not applied is drawn at 45%, except the row being changed, which stays readable. */
+.sound.off .curvebox, .sound.off .srow:not(:focus) { opacity: 0.45; }
+
+/* No sound from the phone yet: no made-up curve or sliders, just what is happening and what to do. */
+.sndempty { display: none; flex-direction: column; gap: 10px; padding: 40px 6px 0; }
+.sndempty .big { font-size: 26px; font-weight: 700; line-height: 1.15; }
+.sndempty .small { font-size: 19px; line-height: 1.3; color: var(--soft); max-inline-size: 30ch; }
+.sound.waiting .curvebox, .sound.waiting .sndtools, .sound.waiting .sndrows { display: none; }
+.sound.waiting .sndempty { display: flex; }
+
+/* The actions: one swipe up from Preset. */
+.sndtools { flex: none; display: flex; gap: 6px; }
+.sndtools .pill-btn {
+  flex: 1 1 auto; justify-content: center; block-size: 48px; padding: 0 10px; border-radius: 14px;
+  font-size: 17px; font-weight: 600; white-space: nowrap;
+}
+.sndtools .power { flex: none; gap: 7px; padding: 0 12px 0 10px; }
+/* The switch: cyan and to the right when Sound Lab is shaping Tidal, a grey outline when it is off. */
+.switch { inline-size: 30px; block-size: 18px; flex: none; }
+.pill-btn .switch { stroke: none; }
+.switch .sw-track { fill: none; stroke: var(--dim); stroke-width: 1.6; }
+.switch .sw-knob { fill: var(--dim); }
+.power.is-on .switch .sw-track { fill: var(--accent); stroke: var(--accent); }
+.power.is-on .switch .sw-knob { fill: #000; }
 
 .curvebox { flex: none; }
-.curve { display: block; inline-size: 100%; block-size: 112px; overflow: visible; }
+.curve { display: block; inline-size: 100%; block-size: 96px; overflow: visible; }
 .curve .zero { stroke: var(--hair); stroke-width: 1; stroke-dasharray: 3 6; }
 .curve-line { fill: none; stroke: var(--accent); stroke-width: 3; stroke-linejoin: round; stroke-linecap: round; }
 .curve-fill { fill: rgba(47, 216, 236, 0.12); }
@@ -172,7 +214,11 @@ button:active { transform: scale(0.94); }
 .freqs { position: relative; block-size: 16px; margin-top: 2px; font-size: 12px; color: var(--dim); font-variant-numeric: tabular-nums; }
 .freqs span { position: absolute; transform: translateX(-50%); }
 
-.sndrows { display: flex; flex-direction: column; gap: 8px; min-block-size: 0; overflow: auto; scrollbar-width: none; padding: 3px 4px 6px; }
+.sndrows {
+  display: flex; flex-direction: column; gap: 8px; min-block-size: 0; overflow: auto; scrollbar-width: none; outline: none;
+  margin: -12px -12px -14px; padding: 14px 16px 76px;
+  -webkit-mask-image: var(--edge-fade); mask-image: var(--edge-fade);
+}
 .sndrows::-webkit-scrollbar { display: none; }
 .srow {
   flex: none; display: grid; grid-template-columns: 112px minmax(0, 1fr) 96px; align-items: center; gap: 16px;
@@ -190,8 +236,6 @@ button:active { transform: scale(0.94); }
 .srow:focus .fill, .srow:focus .knob { background: var(--accent); }
 .srow:focus .knob { box-shadow: 0 0 10px var(--accent); }
 .srow:focus .arrow { color: var(--accent); }
-.sndacts { flex: none; display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-.sndacts .pill-btn { justify-content: center; inline-size: 100%; border-radius: 16px; block-size: 54px; font-size: 19px; padding: 0 12px; }
 
 .bandcols { flex: 1; display: grid; grid-template-columns: repeat(10, minmax(0, 1fr)); gap: 4px; min-block-size: 0; padding: 4px 2px 2px; }
 .bcol {
@@ -222,27 +266,44 @@ button:active { transform: scale(0.94); }
 /* ---- setup ------------------------------------------------------------------------------ */
 .hero { inline-size: 72px; block-size: 72px; color: var(--accent); margin-bottom: 8px; }
 
-/* ---- toast ------------------------------------------------------------------------------ */
-.toast {
-  position: absolute; inset-inline: 0; inset-block-end: 16px; margin-inline: auto; inline-size: max-content; max-inline-size: 80%;
-  padding: 9px 18px; border-radius: 999px; border: 1.5px solid rgba(47, 216, 236, 0.6);
-  color: var(--ink); font-size: 17px; background: rgba(47, 216, 236, 0.14);
-}
-
 /* ---- calm: less light while nobody is touching it ------------------------------------------
-   After 15 s without a swipe or pinch on Now Playing, the art, controls and secondary text dim and the
-   focus glow rests, so the display puts out less light. Title and artist stay as they are; the first
-   swipe or pinch restores everything at once (and still does what it was meant to do). */
-body.calm .artwrap img { opacity: 0.5; }
-body.calm .album, body.calm .topline, body.calm .seek .times { opacity: 0.6; }
+   After 15 s without a swipe or pinch on Now Playing or in Sound Lab, the art, outlines and secondary
+   text dim and the focus glow rests, so the display puts out less light. What you read (title, artist,
+   preset, values) stays as it is, and so does anything that needs you: a warning keeps the page out of
+   calm, and a low battery chip never dims. The focus ring stays the brightest ring on screen. The
+   first swipe or pinch restores everything at once (and still does what it was meant to do).
+   The cover dims to --calm-art: 50%, or less for a pale cover, so that no cover gives off more light
+   at rest than a typical one (app.js measures each cover). */
+body.calm .artwrap { box-shadow: inset 0 0 0 1.5px rgba(255, 255, 255, 0.16); }
+body.calm .artwrap img { opacity: var(--calm-art, 0.5); }
+body.calm .album, body.calm .topline > :not(.low), body.calm .seek .times { opacity: 0.6; }
 body.calm .row button, body.calm .row.main .primary { border-color: rgba(255, 255, 255, 0.16); color: var(--dim); }
-body.calm button:focus, body.calm .row.main .primary:focus { background: transparent; border-color: rgba(47, 216, 236, 0.45); box-shadow: none; }
 body.calm .seek .fill { background: var(--dim); }
-body.calm #like[aria-pressed="true"] { color: var(--dim); border-color: rgba(255, 255, 255, 0.16); }
+body.calm #like[aria-pressed="true"] { color: var(--dim); }
+
+/* Sound Lab, Fine-tune and My sounds. */
+body.calm .soundhead > :not(h2):not(.low) { opacity: 0.6; }
+body.calm .curve-line { stroke: rgba(47, 216, 236, 0.5); }
+body.calm .curve-fill { fill: none; }
+body.calm .curve circle, body.calm .curve circle.hot { fill: var(--dim); }
+body.calm .freqs { opacity: 0.6; }
+body.calm .sndtools .pill-btn, body.calm .srow, body.calm .slot, body.calm .slot .pill-btn { border-color: rgba(255, 255, 255, 0.16); }
+body.calm .sndtools .pill-btn, body.calm .slot .pill-btn { color: var(--dim); }
+body.calm .srow .track .fill, body.calm .srow .track .knob, body.calm .bcol .bt .fill, body.calm .bcol .bt .knob { background: var(--dim); }
+body.calm .srow .arrow { color: rgba(152, 163, 174, 0.6); }
+body.calm .power.is-on .switch .sw-track { fill: rgba(47, 216, 236, 0.5); stroke: none; }
+
+/* The resting focus: a 45% cyan ring, no glow or fill; still more than twice as bright as any hairline. */
+body.calm button:focus, body.calm .row.main .primary:focus, body.calm .srow:focus, body.calm .bcol:focus,
+body.calm .sndtools .pill-btn:focus, body.calm .slot .pill-btn:focus {
+  background: transparent; border-color: rgba(47, 216, 236, 0.45); box-shadow: none;
+}
+body.calm .srow:focus .fill, body.calm .srow:focus .knob, body.calm .bcol:focus .fill, body.calm .bcol:focus .knob { background: var(--soft); box-shadow: none; }
 
 @media (prefers-reduced-motion: no-preference) {
-  button, .seek { transition: box-shadow 140ms ease, background-color 140ms ease, border-color 140ms ease, transform 90ms ease; }
-  .tip { transition: opacity 180ms ease; }
+  button, .seek, .srow, .bcol { transition: box-shadow 140ms ease, background-color 140ms ease, border-color 140ms ease, transform 90ms ease; }
+  .nameline > p { transition: opacity 180ms ease; }
   /* Easing into calm is slow so it never draws the eye; waking is instant (no transition back). */
-  body.calm .artwrap img, body.calm .album, body.calm .topline, body.calm .seek .times { transition: opacity 900ms ease; }
+  body.calm .artwrap img, body.calm .album, body.calm .topline > *, body.calm .seek .times,
+  body.calm .soundhead > *, body.calm .freqs { transition: opacity 900ms ease; }
 }

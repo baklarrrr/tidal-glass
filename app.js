@@ -32,7 +32,6 @@ let lastHeard = 0;
 let pendingSince = 0;
 let lastHello = 0;
 let tickTimer = 0;
-let toastTimer = 0;
 let lastAction = '';
 const waiters = new Set();
 
@@ -315,12 +314,32 @@ function volParts() {
   return { cur: Number.isFinite(cur) ? cur : null, max: Number.isFinite(max) ? max : null };
 }
 
-function showToast(text) {
-  const t = $('toast');
-  t.textContent = text;
-  t.hidden = false;
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { t.hidden = true; }, 1600);
+// ---- the name line: a button's name, or a short confirmation ---------------------------------
+// On the see-through display a message on top of other text makes both unreadable, so Now Playing
+// keeps one line under its controls for this. A confirmation takes the line from the button's name
+// while it shows, and is cut with "…" rather than wrapped onto the controls.
+
+let notice = null;      // { text, until } while a confirmation shows
+let noticeTimer = 0;
+let tipWaiting = false; // focus moved while a confirmation showed: name that button once it ends
+
+function say(text, ms = 2200) {
+  notice = { text, until: Date.now() + ms };
+  const n = $('notice');
+  n.textContent = text;
+  n.classList.add('on');
+  clearTimeout(tipShow);
+  clearTimeout(tipHide);
+  $('tip').classList.remove('on');
+  clearTimeout(noticeTimer);
+  noticeTimer = setTimeout(endNotice, ms);
+}
+
+function endNotice() {
+  notice = null;
+  $('notice').classList.remove('on');
+  if (tipWaiting && view.screen === 'now') showTip(document.activeElement);
+  tipWaiting = false;
 }
 
 // ---- button names: shown briefly when focus lands, so icons never need guessing -------------
@@ -328,7 +347,7 @@ function showToast(text) {
 // Each name says what the next press does.
 const TIPS = {
   prev: () => 'Previous song',
-  toggle: () => (state && state.play ? 'Pause' : (hasTrack() ? 'Play' : 'Start Tidal and play')),
+  toggle: () => (state && state.play ? 'Pause' : (hasTrack() || (state && state.ses) ? 'Play' : 'Start Tidal and play')),
   next: () => 'Next song',
   like: () => (state && state.liked ? 'Remove from My Collection' : 'Add to My Collection'),
   queue: () => 'Up next',
@@ -348,6 +367,8 @@ function showTip(el) {
   clearTimeout(tipHide);
   tipFor = el && TIPS[el.id] ? el.id : null;
   if (!tipFor) { tip.classList.remove('on'); return; }
+  // A confirmation on the line wins; the name follows when it ends.
+  if (notice) { tipWaiting = true; return; }
   // A short wait keeps quick swipes from flashing every name on the way past.
   tipShow = setTimeout(() => {
     tip.textContent = TIPS[tipFor]();
@@ -357,7 +378,7 @@ function showTip(el) {
 }
 
 function refreshTip() {
-  if (tipFor && $('tip').classList.contains('on')) $('tip').textContent = TIPS[tipFor]();
+  if (tipFor && !notice && $('tip').classList.contains('on')) $('tip').textContent = TIPS[tipFor]();
 }
 
 // ---- Now Playing -------------------------------------------------------------------------
@@ -436,19 +457,80 @@ function warningShown() {
     || (typeof mqtt === 'undefined' && mqttTries >= 10 && !window.__testLink));
 }
 
+// The top line is about the link to the phone. What Tidal is doing (closed, starting, did not start,
+// needs access) is said once, in the headline, never repeated up here.
 function stateLine() {
   if (typeof mqtt === 'undefined' && mqttTries >= 10 && !window.__testLink) return 'No link yet: press Back, then Refresh';
   if (!state) return lastHeard ? 'Waiting for your phone…' : 'Connecting to your phone…';
   if (linkDownSince && Date.now() - linkDownSince > 5000) return 'Reconnecting…';
-  const phase = startPhase();
-  if (phase === 'starting') return state.ses ? 'Asking Tidal to play…' : 'Starting Tidal…';
-  if (phase === 'failed') return 'Phone connected';
+  // While Tidal starts the phone may not answer at once; that is not a dead phone.
+  if (startPhase()) return 'Phone connected';
   if (phoneSilent()) return 'Your phone is not answering';
-  if (!state.acc) return 'Phone needs notification access';
-  // The headline already says what Tidal is doing; this line is about the link.
   if (!hasTrack()) return 'Phone connected';
   if (state.buf) return 'Buffering…';
   return state.play ? 'Playing' : 'Paused';
+}
+
+// Headline and line under it when no song is showing: what is going on, and what to do.
+function emptyHeadline(s) {
+  if (!s) return ['Tidal Glass', ''];
+  if (!s.acc) return ['Needs notification access', 'Open Tidal Glass on your phone and allow it.'];
+  // Tidal closed on the phone is not a dead end: Play starts it where it left off. If it does not
+  // start, the headline says so and what to do.
+  const closed = !s.ses;
+  const phase = startPhase();
+  if (phase === 'starting') return closed ? ['Starting Tidal…', 'Opening it on your phone.'] : ['Starting playback…', 'Asking Tidal on your phone to play.'];
+  if (phase === 'failed') {
+    return closed ? ["Tidal didn't start", 'Open Tidal on your phone, then press Play.']
+      : ["Tidal didn't play", 'Pick something from your library, or press Play on your phone.'];
+  }
+  return closed ? ['Tidal is closed', 'Press Play to start it where you left off.'] : ['Nothing playing', 'Press Play, or pick something from your library.'];
+}
+
+// ---- cover light: a pale cover is dimmed more in calm --------------------------------------
+// An album cover is most of the light on Now Playing (77% with a pale one). In calm the cover dims to
+// 50%; a cover brighter than a typical one dims further, so none gives off more light at rest than a
+// typical cover does. Measured once per cover on a 32 x 32 copy of the loaded image; no extra download.
+// Linear light of a typical cover at 50% (the test cover in tests/light_measure.py measures 0.057).
+const CALM_ART_LIGHT = 0.06;
+
+function srgbToLinear(v) {
+  return v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;
+}
+
+function calmArtOpacity(img) {
+  const c = document.createElement('canvas');
+  c.width = 32;
+  c.height = 32;
+  const g = c.getContext('2d', { willReadFrequently: true });
+  g.imageSmoothingQuality = 'high';
+  g.drawImage(img, 0, 0, 32, 32);
+  const px = g.getImageData(0, 0, 32, 32).data; // throws for a cover from a host without CORS
+  // The display adds light, so what matters is the mean linear light the dimmed cover sends out.
+  const light = (a) => {
+    let sum = 0;
+    for (let i = 0; i < px.length; i += 4) {
+      sum += 0.2126 * srgbToLinear(a * px[i] / 255) + 0.7152 * srgbToLinear(a * px[i + 1] / 255)
+        + 0.0722 * srgbToLinear(a * px[i + 2] / 255);
+    }
+    return sum / (px.length / 4);
+  };
+  if (light(0.5) <= CALM_ART_LIGHT) return 0.5;
+  let lo = 0.2;
+  let hi = 0.5;
+  for (let i = 0; i < 12; i++) {
+    const mid = (lo + hi) / 2;
+    if (light(mid) > CALM_ART_LIGHT) hi = mid; else lo = mid;
+  }
+  return Math.max(0.2, lo);
+}
+
+function capArt(img, readable) {
+  let a = 0.4; // a cover that cannot be measured gets a fixed, cautious cap
+  if (readable) {
+    try { a = calmArtOpacity(img); } catch (e) { a = 0.4; }
+  }
+  $('artwrap').style.setProperty('--calm-art', a.toFixed(3));
 }
 
 function renderNow() {
@@ -464,39 +546,45 @@ function renderNow() {
   drawBattery();
   $('volText').textContent = volPreview != null ? String(volPreview) : (cur == null ? '' : String(cur));
 
-  // Tidal closed on the phone is not a dead end: Play starts it where it left off. If it does not
-  // start, the headline says so and what to do.
-  const closed = !!(s && s.acc && !s.ses);
-  const failed = startPhase() === 'failed';
-  $('title').textContent = track ? s.ti
-    : (s && !s.acc ? 'Needs access' : failed ? "Tidal didn't start" : (closed ? 'Tidal is closed' : (s ? 'Nothing playing' : 'Tidal Glass')));
-  $('artist').textContent = track ? (s.ar || '') : (s && !s.acc
-    ? 'Open Tidal Glass on your phone and allow notification access.'
-    : failed ? 'Open Tidal on your phone, then press Play.'
-      : (closed ? 'Press Play to start it where you left off.' : 'Press Play, or pick something from your library.'));
+  const [headline, subline] = track ? [s.ti, s.ar || ''] : emptyHeadline(s);
+  $('title').textContent = headline;
+  $('artist').textContent = subline;
   $('album').textContent = track ? (s.al || '') : '';
 
   const wrap = $('artwrap');
   const art = $('art');
   wrap.classList.toggle('empty', !track);
   if (track && s.art) {
-    if (art.getAttribute('src') !== s.art) {
+    if (art.dataset.want !== s.art) {
+      art.dataset.want = s.art;
       art.hidden = true;
       wrap.classList.remove('has-art');
-      art.onload = () => { art.hidden = false; wrap.classList.add('has-art'); };
-      art.onerror = () => { art.hidden = true; wrap.classList.remove('has-art'); };
+      // Asked for with CORS so the cover can be measured (Tidal's image server allows it). A server
+      // that does not allow it gets one plain retry: the cover always shows, with the fixed cap.
+      art.crossOrigin = 'anonymous';
+      art.onload = () => { art.hidden = false; wrap.classList.add('has-art'); capArt(art, art.crossOrigin === 'anonymous'); };
+      art.onerror = () => {
+        if (art.crossOrigin === 'anonymous' && art.dataset.want === s.art) {
+          art.removeAttribute('crossorigin');
+          art.src = s.art;
+          return;
+        }
+        art.hidden = true;
+        wrap.classList.remove('has-art');
+      };
       art.src = s.art;
     }
   } else {
     art.hidden = true;
     art.removeAttribute('src');
+    delete art.dataset.want;
     wrap.classList.remove('has-art');
   }
 
   const playing = !!(s && s.play);
   shown($('playIcon'), !playing);
   shown($('pauseIcon'), playing);
-  $('toggle').setAttribute('aria-label', playing ? 'Pause' : (track ? 'Play' : 'Start Tidal and play'));
+  $('toggle').setAttribute('aria-label', playing ? 'Pause' : (track || (s && s.ses) ? 'Play' : 'Start Tidal and play'));
 
   const liked = !!(s && s.liked);
   $('like').setAttribute('aria-pressed', liked ? 'true' : 'false');
@@ -541,9 +629,10 @@ function tick() {
 }
 
 // ---- calm: less light while nobody is touching it ------------------------------------------
-// After CALM_AFTER without a swipe or pinch on Now Playing the page dims its art and controls (see
-// style.css); the first input wakes it at once and is handled as usual.
+// After CALM_AFTER without a swipe or pinch on Now Playing or in Sound Lab the page dims its art and
+// outlines (see style.css); the first input wakes it at once and is handled as usual.
 const CALM_AFTER = 15000;
+const SOUND_SCREENS = new Set(['sound', 'bands', 'slots']);
 let lastInputAt = Date.now();
 
 function wakeUp() {
@@ -553,7 +642,9 @@ function wakeUp() {
 
 function checkCalm() {
   // Never while a warning is showing: it must stay readable.
-  document.body.classList.toggle('calm', view.screen === 'now' && Date.now() - lastInputAt > CALM_AFTER && !warningShown());
+  const sc = view.screen;
+  const quiet = sc === 'now' ? !warningShown() : SOUND_SCREENS.has(sc) && !sndWarn;
+  document.body.classList.toggle('calm', quiet && Date.now() - lastInputAt > CALM_AFTER);
 }
 
 let lastPhase = '';
@@ -587,8 +678,8 @@ function confirmAction() {
   const a = lastAction;
   if (!a || !prevState || !state) return;
   lastAction = '';
-  if (a === 'like' && prevState.liked !== state.liked) showToast(state.liked ? 'Added to My Collection' : 'Removed from My Collection');
-  else if ((a === 'next' || a === 'prev') && state.ti && state.ti !== prevState.ti) showToast(state.ti);
+  if (a === 'like' && prevState.liked !== state.liked) say(state.liked ? 'Added to My Collection' : 'Removed from My Collection');
+  else if ((a === 'next' || a === 'prev') && state.ti && state.ti !== prevState.ti) say(state.ti);
 }
 
 let confirmTimer = 0;
@@ -599,7 +690,10 @@ let startingSince = 0;
 
 function press(c, extra) {
   lastAction = c;
-  if (c === 'play' && !hasTrack()) startingSince = Date.now();
+  if (c === 'play' && !hasTrack()) {
+    startingSince = Date.now();
+    renderNow(); // the headline says "Starting…" at once
+  }
   send(c, extra);
   // Play and pause are safe to repeat: if Tidal has not changed after a moment (the phone was
   // reconnecting, a message was lost), send it once more instead of leaving the press unanswered.
@@ -610,7 +704,7 @@ function press(c, extra) {
       confirmTimer = 0;
       if (state && !!state.play === want) return;
       if (want && startingSince) return; // the phone is still starting Tidal
-      showToast(want ? 'Asking Tidal to play again…' : 'Asking Tidal to pause again…');
+      say(want ? 'Asking Tidal to play again…' : 'Asking Tidal to pause again…');
       send(c, extra);
     }, 2500);
   }
@@ -646,7 +740,7 @@ function nudgeVolume(delta) {
   if (cur == null) { press(delta > 0 ? 'volUp' : 'volDown'); return; }
   volPreview = Math.max(0, Math.min((volPreview ?? cur) + delta, max ?? 15));
   $('volText').textContent = String(volPreview);
-  showToast(`Volume ${volPreview} of ${max ?? 15}`);
+  say(`Volume ${volPreview} of ${max ?? 15}`, 1600);
   clearTimeout(volTimer);
   // One message for a whole burst of presses.
   volTimer = setTimeout(() => {
@@ -731,7 +825,10 @@ function itemButton(id, title, sub, icon, onPress, opts = {}) {
 function focusItem(id) {
   const items = $('items');
   const match = id != null ? items.querySelector(`button[data-id="${CSS.escape(String(id))}"]`) : null;
-  (match || items.querySelector('button') || $('listTitle')).focus();
+  const target = match || items.querySelector('button');
+  if (!target) { $('listTitle').focus(); return; }
+  target.focus({ preventScroll: true });
+  reveal(target);
 }
 
 function renderQueue(fresh) {
@@ -744,7 +841,7 @@ function renderQueue(fresh) {
   $('more').hidden = true;
   q.forEach((e) => items.appendChild(itemButton(e.id, e.ti, e.su, e.id === state.qa ? ICONS.note : ICONS.play, () => {
     send('skip', { id: e.id });
-    showToast(`Playing ${e.ti}`);
+    say(`Playing ${e.ti}`);
     history.back();
   }, { current: e.id === state.qa })));
   focusItem(fresh ? state && state.qa : keep);
@@ -775,7 +872,7 @@ function renderLibrary(m, fromNetwork) {
       else if (it.p) {
         lastAction = 'libplay';
         send('libplay', { id: it.id });
-        showToast(`Playing ${it.ti}`);
+        say(`Playing ${it.ti}`);
         leaveToNow();
       }
     }, { chevron: it.b, onRight: open }));
@@ -816,6 +913,66 @@ function leaveToNow() {
 function onPopState(e) {
   depth = Math.max(0, depth - 1);
   render(e.state || ROOT);
+}
+
+// ---- swiping through the scrolling lists -------------------------------------------------------
+// The glasses move focus themselves when you swipe (spatial navigation). In the lists that scroll
+// (Library, Up next, Sound Lab's controls) the browser's version gets three things wrong, so they are
+// repaired right after it has had its turn: a swipe that only scrolls the list instead of moving to the
+// next row, focus landing on the list itself with no row lit, and Up from More going nowhere. When the
+// platform did move focus to a row, nothing is changed except the scroll, which then shows that row
+// whole, inside the padding that keeps its ring and glow from being cut.
+// Seen in desktop Chrome with spatial navigation; how the glasses' own browser behaves here is not
+// verified.
+
+function listOf(el) {
+  if (!el || !el.closest) return null;
+  if (el.closest('#items') || el.id === 'more') {
+    return { box: $('items'), rows: () => [...$('items').querySelectorAll('button')], below: () => (!$('more').hidden ? $('more') : null), above: null };
+  }
+  if (el.closest('#sndRows') || el.closest('.sndtools')) {
+    return { box: $('sndRows'), rows: () => [...$('sndRows').querySelectorAll('.srow')], below: null, above: () => $('sndPower') };
+  }
+  return null;
+}
+
+function repairSwipe(from, dir) {
+  const list = listOf(from);
+  if (!list) return;
+  const rows = list.rows();
+  const now = document.activeElement;
+  const moved = now && now !== from && now !== list.box && now !== document.body;
+  if (!moved) {
+    const i = rows.indexOf(from);
+    let want = null;
+    if (i >= 0) want = rows[i + dir] || (dir > 0 ? list.below && list.below() : list.above && list.above());
+    else if (list.below && from === list.below() && dir < 0) want = rows[rows.length - 1];
+    else if (dir > 0 || now === list.box) want = rows[0];
+    if (want) want.focus({ preventScroll: true });
+  }
+  const f = document.activeElement;
+  if (rows.includes(f)) reveal(f, dir);
+}
+
+// Scrolls the focused row's list so the row shows whole, 14 px inside the list's edges (its padding).
+// Going down, a row left cut by the top edge is scrolled out of sight, so no sliver of it peeks out.
+function reveal(el, dir = 0) {
+  const box = el.closest('#items, #sndRows');
+  if (!box) return;
+  const pad = 14;
+  const b = box.getBoundingClientRect();
+  const r = el.getBoundingClientRect();
+  if (r.top < b.top + pad) box.scrollTop -= (b.top + pad) - r.top;
+  else if (r.bottom > b.bottom - pad) {
+    box.scrollTop += r.bottom - (b.bottom - pad);
+    if (dir >= 0) {
+      const rows = [...box.querySelectorAll('.srow, li')];
+      const top = box.getBoundingClientRect().top + pad;
+      const cut = rows.find((x) => { const q = x.getBoundingClientRect(); return q.top < top - 1 && q.bottom > box.getBoundingClientRect().top; });
+      const next = cut && rows[rows.indexOf(cut) + 1];
+      if (next && next.getBoundingClientRect().top > top) box.scrollTop += next.getBoundingClientRect().top - top;
+    }
+  }
 }
 
 // ---- Sound Lab ---------------------------------------------------------------------------
@@ -866,8 +1023,13 @@ function receiveSound(m) {
     sndLoading = 0;
     if (view.screen === 'slots') history.back();
   }
-  if (view.screen === 'sound') renderSound();
-  else if (view.screen === 'bands') renderBands();
+  if (view.screen === 'sound') {
+    const first = $('sound').classList.contains('waiting');
+    renderSound();
+    // The controls just appeared: put focus on them so the next swipe does something.
+    const a = document.activeElement;
+    if (first || !a || a === document.body || a === $('soundTitle')) focusSound(view.focus);
+  } else if (view.screen === 'bands') renderBands();
   else if (view.screen === 'slots') renderSlots(true);
 }
 
@@ -957,13 +1119,6 @@ function buildSound() {
     if (c.min >= 0) row.querySelector('.mid').hidden = true;
     box.appendChild(row);
   }
-  const acts = document.createElement('div');
-  acts.className = 'sndacts';
-  acts.innerHTML = '<button id="sndFine" class="pill-btn"><span>Fine-tune</span></button>'
-    + '<button id="sndSlots" class="pill-btn"><span>My sounds</span></button>'
-    + '<button id="sndTest" class="pill-btn"><span>Test speakers</span></button>'
-    + '<button id="sndReset" class="pill-btn"><span>Reset to flat</span></button>';
-  box.appendChild(acts);
 
   box.addEventListener('keydown', (e) => {
     const row = e.target.closest && e.target.closest('.srow');
@@ -974,6 +1129,10 @@ function buildSound() {
       const dir = e.key === 'ArrowRight' ? 1 : -1;
       if (row.id === 'srow-preset') stepPreset(dir);
       else stepSlider(row.dataset.k, dir);
+    } else if (e.key === 'ArrowUp' && row.id === 'srow-preset') {
+      // Up from Preset is On/Off, the first of the actions, for comparing in one swipe.
+      e.preventDefault();
+      $('sndPower').focus({ preventScroll: true });
     } else if (e.key === 'Enter') {
       e.preventDefault();
       if (row.id === 'srow-preset') stepPreset(1);
@@ -990,7 +1149,9 @@ function buildSound() {
   });
   $('sndReset').addEventListener('click', () => {
     if (!snd) return;
-    confirmTwice($('sndReset'), 'Pinch again to reset', () => {
+    if (!armed.has('sndReset')) soundNote('Pinch Reset again to go back to flat', 3000);
+    confirmTwice($('sndReset'), 'Reset?', () => {
+      sndNote = null;
       Object.assign(snd.s, { preset: 'Flat', bass: 0, mids: 0, treble: 0, clarity: 0, loud: 0, bal: 0, bands: Array(BAND_COUNT).fill(0) });
       soundChanged();
       flushSound();
@@ -1042,8 +1203,16 @@ function openSub(screen, from) {
 function openSound() {
   askSound();
   renderSound();
-  const target = (view.focus && $(view.focus)) || $('srow-preset');
-  target.focus();
+  focusSound(view.focus);
+}
+
+// Where focus goes in Sound Lab: the remembered control, else Preset. With no sound from the phone yet
+// there are no controls, so the heading holds focus until the sound arrives (receiveSound moves it on).
+function focusSound(id) {
+  if (!snd) { $('soundTitle').focus({ preventScroll: true }); return; }
+  const target = (id && $(id)) || $('srow-preset');
+  target.focus({ preventScroll: true });
+  if (target.classList.contains('srow')) reveal(target);
 }
 
 // Sound Lab says things in its own header line, never in a message over the controls (on the
@@ -1063,23 +1232,32 @@ function expectSound(doing, check, done) {
   renderSoundStatus();
 }
 
+// True while the Sound Lab header shows something that needs the wearer (it keeps calm away).
+let sndWarn = false;
+
 function renderSoundStatus() {
   let text;
   let live = false;
+  let warn = false;
   if (sndNote && Date.now() < sndNote.until) text = sndNote.text;
   else if (sndPending) {
-    text = Date.now() - sndPending.at < 7000 ? sndPending.doing : 'Your phone did not confirm. Try again.';
+    warn = Date.now() - sndPending.at >= 7000;
+    text = warn ? 'Your phone did not confirm. Try again.' : sndPending.doing;
     if (Date.now() - sndPending.at > 12000) sndPending = null;
-  } else if (linkDownSince && Date.now() - linkDownSince > 5000) text = 'Reconnecting…';
-  else if (!snd) text = sndAsked && Date.now() - sndAsked > 7000 ? 'Your phone is not answering' : 'Asking your phone…';
-  else if (phoneSilent()) text = 'Your phone is not answering';
+  } else if (linkDownSince && Date.now() - linkDownSince > 5000) { text = 'Reconnecting…'; warn = true; }
+  else if (!snd) {
+    warn = !!(sndAsked && Date.now() - sndAsked > 7000);
+    text = warn ? 'Your phone is not answering' : 'Asking your phone…';
+  } else if (phoneSilent()) { text = 'Your phone is not answering'; warn = true; }
   else if (!snd.s.on) text = 'Off · Tidal plays as normal';
   else { text = snd.status || ''; live = !!snd.active; }
+  sndWarn = warn;
   $('sndStateText').textContent = text;
   $('sndDot').classList.toggle('live', live);
   // Fine-tune and My sounds keep their hint in the same place, and show notes and confirmations there.
   const busy = (sndNote && Date.now() < sndNote.until) || sndPending;
-  for (const id of ['bandsState', 'slotsState']) $(id).textContent = busy ? text : $(id).dataset.default;
+  for (const id of ['bandsState', 'slotsState']) $(id).textContent = busy || warn ? text : $(id).dataset.default;
+  if (warn) document.body.classList.remove('calm');
 }
 
 function renderSound() {
@@ -1087,10 +1265,15 @@ function renderSound() {
   const sec = $('sound');
   sec.classList.toggle('waiting', !snd);
   sec.classList.toggle('off', !!(snd && !snd.s.on));
+  // The switch shows the state (cyan, knob right = shaping Tidal); the label repeats it in words.
+  const on = !!(snd && snd.s.on);
   const power = $('sndPower');
-  power.setAttribute('aria-pressed', snd && snd.s.on ? 'true' : 'false');
-  power.querySelector('span').textContent = snd && !snd.s.on ? 'Off' : 'On';
-  if (!snd) { drawCurve(Array(BAND_COUNT).fill(0), null); return; }
+  power.classList.toggle('is-on', on);
+  power.setAttribute('aria-pressed', on ? 'true' : 'false');
+  power.setAttribute('aria-label', on ? 'Sound Lab is on. Pinch to turn it off and hear Tidal as normal.' : 'Sound Lab is off. Pinch to turn it on.');
+  power.querySelector('.sw-knob').setAttribute('cx', on ? '21' : '9');
+  power.querySelector('span').textContent = on ? 'On' : 'Off';
+  if (!snd) return;
   const s = snd.s;
   $('srow-preset').querySelector('.pname').textContent = s.preset;
   for (const c of SLIDERS) {
@@ -1117,7 +1300,7 @@ function curveX(i) {
 }
 
 function drawCurve(gains, hot) {
-  const mid = 56;
+  const mid = 48; // the curve's box is 540 x 96 (index.html)
   const scale = (mid - 8) / 12; // ±12 dB fills the box; the rare ±15 may overhang a little
   const xs = gains.map((_, i) => curveX(i));
   const ys = gains.map((g) => mid - g * scale);
@@ -1385,6 +1568,14 @@ function wire() {
       e.stopPropagation();
       nudgeSeek(e.key === 'ArrowRight' ? 1 : -1);
     }
+  });
+
+  // Up and down in the scrolling lists: let the platform move focus, then repair (see repairSwipe).
+  document.addEventListener('keydown', (e) => {
+    if ((e.key !== 'ArrowUp' && e.key !== 'ArrowDown') || e.defaultPrevented) return;
+    const from = e.target;
+    if (!listOf(from)) return;
+    setTimeout(() => repairSwipe(from, e.key === 'ArrowDown' ? 1 : -1), 0);
   });
 
   // Lists are one column, so sideways swipes are free: left steps back, right opens a folder.
