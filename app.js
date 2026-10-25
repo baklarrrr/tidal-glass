@@ -421,12 +421,12 @@ function hasTrack() {
   return !!(state && state.acc && state.ses && state.ti);
 }
 
-// Play pressed with Tidal closed: 'starting' for 15 s. Then 'failed' (said in the headline) if the phone
+// Play pressed with Tidal closed: 'starting' for 25 s (a cold Tidal can take a while on a slow network). Then 'failed' (said in the headline) if the phone
 // has answered since the press, so Tidal itself did not start, or 'silent' if the phone has not, so it
 // is the phone that is not answering. Either stays until the next press.
 function startPhase() {
   if (!startingSince || hasTrack()) return '';
-  if (Date.now() - startingSince < 15000) return 'starting';
+  if (Date.now() - startingSince < 25000) return 'starting';
   return heardLive > startingSince ? 'failed' : 'silent';
 }
 
@@ -526,13 +526,13 @@ function emptyHeadline(s) {
   // start, the headline says so and what to do.
   const closed = !s.ses;
   const phase = startPhase();
-  if (phase === 'starting') return closed ? ['Starting Tidal…', 'Opening it on your phone.'] : ['Starting playback…', 'Asking Tidal on your phone to play.'];
+  if (phase === 'starting') return closed ? ['Starting Tidal…', 'Starting your recent music on your phone.'] : ['Starting playback…', 'Asking Tidal on your phone to play.'];
   if (phase === 'failed') {
-    return closed ? ["Tidal didn't start", 'Open Tidal on your phone, then press Play.']
+    return closed ? ["Tidal didn't start", 'Press Play to try again, or pick something from your library.']
       : ["Tidal didn't play", 'Pick something from your library, or press Play on your phone.'];
   }
   if (phase === 'silent') return ['Your phone is not answering', 'Open Tidal Glass on your phone, then press Play.'];
-  return closed ? ['Tidal is closed', 'Press Play to start it where you left off.'] : ['Nothing playing', 'Press Play, or pick something from your library.'];
+  return closed ? ['Tidal is closed', 'Press Play to start your recent music.'] : ['Nothing playing', 'Press Play, or pick something from your library.'];
 }
 
 // ---- cover light: a pale cover is dimmed more in calm --------------------------------------

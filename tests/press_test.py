@@ -192,20 +192,20 @@ with sync_playwright() as p:
     # the headline says Tidal didn't start; if the phone has said nothing since, it says the phone is not
     # answering (never blaming Tidal). Either stays until the next press.
     CLOSED = "s => { state = {t: 'state', acc: true, ses: false, play: false, buf: false, pos: 0, at: Date.now(), vol: s.vol, q: [], qa: -1}; "
-    page.evaluate(CLOSED + "startingSince = Date.now() - 20000; heardLive = Date.now() - 13000; pendingSince = 0; renderNow(); }", STATE)
+    page.evaluate(CLOSED + "startingSince = Date.now() - 30000; heardLive = Date.now() - 23000; pendingSince = 0; renderNow(); }", STATE)
     failed = page.evaluate("[$('title').textContent, $('artist').textContent, stateLine()]")
     # The failure is said in the headline, which stays bright; the plain top line is not a warning.
     failed_look = page.evaluate("[document.body.classList.contains('stale'), document.querySelector('.topline .state').classList.contains('warn')]")
     page.evaluate("startingSince = Date.now() - 41000; heardLive = Date.now() - 34000; renderNow();")
     after40 = page.evaluate("[$('title').textContent, stateLine()]")
-    page.evaluate(CLOSED + "startingSince = Date.now() - 20000; heardLive = Date.now() - 60000; pendingSince = Date.now() - 20000; renderNow(); }", STATE)
+    page.evaluate(CLOSED + "startingSince = Date.now() - 30000; heardLive = Date.now() - 60000; pendingSince = Date.now() - 30000; renderNow(); }", STATE)
     silent = page.evaluate("[$('title').textContent, stateLine(), document.querySelector('.topline .state').classList.contains('warn')]")
     page.evaluate("press('volUp')")
     page.wait_for_timeout(100)
     cleared = page.evaluate("[$('title').textContent, startingSince]")
     page.evaluate("pendingSince = 0; heardLive = Date.now(); renderNow();")
     check("a failed start: Tidal blamed only after the phone answered, the phone blamed when it is silent, kept until the next press",
-          failed[0] == "Tidal didn't start" and "then press Play" in failed[1] and failed[2] == "Phone connected"
+          failed[0] == "Tidal didn't start" and "Press Play to try again" in failed[1] and failed[2] == "Phone connected"
           and after40 == ["Tidal didn't start", "Phone connected"]
           and silent == ["Your phone is not answering", "Your phone is not answering", True]
           and cleared == ["Tidal is closed", 0] and failed_look == [False, False], json.dumps([failed, after40, silent, cleared, failed_look]))
