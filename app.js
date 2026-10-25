@@ -114,11 +114,29 @@ function linkChanged() {
   $('stateText').textContent = stateLine();
 }
 
+// The link library is a large file. On the first launch after an update the previous offline copy
+// of this app can give up on it before it arrives, so it is fetched again for about half a minute
+// instead of the page waiting silently.
+let mqttTries = 0;
+function loadMqtt() {
+  if (typeof mqtt !== 'undefined' || mqttTries >= 10) return;
+  mqttTries++;
+  const s = document.createElement('script');
+  s.src = 'vendor/mqtt.min.js';
+  s.onload = () => { if (document.visibilityState === 'visible') openLink(); };
+  s.onerror = () => setTimeout(loadMqtt, 3000);
+  document.head.appendChild(s);
+}
+
 function openLink() {
   if (links.length) return;
   // Tests (and only tests) supply their own link.
   if (window.__testLink) { links = [window.__testLink]; window.__testLink.onMessage = handle; flushOutbox(); return; }
-  if (typeof mqtt === 'undefined') return;
+  if (typeof mqtt === 'undefined') {
+    if (!linkDownSince) linkDownSince = Date.now();
+    loadMqtt();
+    return;
+  }
   linkDownSince = Date.now();
   const id = Array.from(crypto.getRandomValues(new Uint8Array(6)), (b) => b.toString(16).padStart(2, '0')).join('');
   for (const url of BROKERS) {
@@ -312,6 +330,7 @@ function hasTrack() {
 }
 
 function stateLine() {
+  if (typeof mqtt === 'undefined' && mqttTries >= 10 && !window.__testLink) return 'No link yet: press Back, then Refresh';
   if (!state) return lastHeard ? 'Waiting for your phone…' : 'Connecting to your phone…';
   if (linkDownSince && Date.now() - linkDownSince > 5000) return 'Reconnecting…';
   if (pendingSince && Date.now() - pendingSince > 7000) return 'Your phone is not answering';
