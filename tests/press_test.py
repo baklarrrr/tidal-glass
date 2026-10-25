@@ -71,7 +71,8 @@ with sync_playwright() as p:
         return page.evaluate("async () => Promise.all(window.__sent.map(async b => (await openMessage(b)).c))")
 
     def reset():
-        page.evaluate("window.__sent.length = 0")
+        # Each check starts from what the phone said, not from an earlier check's press still on the button.
+        page.evaluate("window.__sent.length = 0; if (typeof clearIntent === 'function') { clearIntent(); renderNow(); }")
 
     # 1. A press with hand movement (pointer moves 24 px between down and up) is still Play.
     reset()
@@ -580,6 +581,64 @@ with sync_playwright() as p:
         check(NAME24, empty == [True, False, False, False] and filled == [False, True, True, "srow-preset"], json.dumps([empty, filled]))
     guard(NAME24, t24)
     sq.close()
+
+    # 42-45. Bakar 2026-10-25 15:50, "reduce any lag": Play/Pause shows on the button at once instead of
+    # a round trip later. A second tap before the phone answers undoes the first, an unanswered press goes
+    # back to what the phone said, and the line and dot never say Playing before the phone does.
+    BUTTON = ("() => [!document.getElementById('pauseIcon').hasAttribute('hidden'), "
+              "document.getElementById('stateText').textContent, document.getElementById('dot').classList.contains('live')]")
+    PAUSED = "s => { state = {...s, play: false, at: Date.now()}; heardLive = Date.now(); pendingSince = 0; renderNow(); }"
+
+    NAME42 = "Play shows on the button at once; the line and dot wait for the phone"
+    def t42():
+        reset()
+        page.evaluate(PAUSED, STATE)
+        page.focus("#toggle")
+        page.keyboard.press("Enter")
+        page.wait_for_timeout(60)
+        b = page.evaluate(BUTTON)
+        check(NAME42, b[0] is True and b[1] != "Playing" and b[2] is False, json.dumps(b))
+    guard(NAME42, t42)
+
+    NAME43 = "two taps before the phone answers send play, then pause"
+    def t43():
+        reset()
+        page.evaluate(PAUSED, STATE)
+        page.focus("#toggle")
+        page.keyboard.press("Enter")
+        page.wait_for_timeout(150)
+        page.keyboard.press("Enter")
+        page.wait_for_timeout(300)
+        c, b = commands(), page.evaluate(BUTTON)
+        check(NAME43, c[:2] == ["play", "pause"] and b[0] is False, json.dumps([c, b]))
+    guard(NAME43, t43)
+
+    NAME44 = "an unanswered Play goes back to Play after 5 s"
+    def t44():
+        reset()
+        page.evaluate(PAUSED, STATE)
+        page.focus("#toggle")
+        page.keyboard.press("Enter")
+        page.wait_for_timeout(300)
+        during = page.evaluate(BUTTON)
+        page.wait_for_timeout(5000)
+        after = page.evaluate(BUTTON)
+        check(NAME44, during[0] is True and after[0] is False and after[1] != "Playing", json.dumps([during, after]))
+    guard(NAME44, t44)
+
+    NAME45 = "the phone's Playing keeps the button, and the line says Playing only then"
+    def t45():
+        reset()
+        page.evaluate(PAUSED, STATE)
+        page.focus("#toggle")
+        page.keyboard.press("Enter")
+        page.wait_for_timeout(300)
+        page.evaluate("async s => { await handle(await seal({...s, play: true, at: Date.now()})); }", STATE)
+        page.wait_for_timeout(5300)
+        b = page.evaluate(BUTTON)
+        resent = commands().count("play")
+        check(NAME45, b[0] is True and b[1] == "Playing" and resent == 1, json.dumps([b, resent]))
+    guard(NAME45, t45)
 
     # 8. The old link's daily-limit message is gone for good.
     source = page.evaluate("fetch('app.js').then(r => r.text())")

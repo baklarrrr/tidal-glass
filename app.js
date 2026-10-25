@@ -97,22 +97,29 @@ async function seal(obj) {
 }
 
 // ---- the link to the phone ----------------------------------------------------------------
-// Two free public MQTT brokers at once (EMQX and HiveMQ), plus a spare on port 443: no account, no
-// daily cap, pushed both ways in a tenth of a second, and any one can be down without anything
-// stopping. The phone keeps its latest state retained there, so a reopened app shows it the moment
-// it connects. Messages are AES-GCM sealed here and on the phone; the brokers only carry ciphertext.
+// Three free public MQTT brokers at once (EMQX, HiveMQ and shiftr.io's on port 443): no account, no
+// daily cap, and any one can be down without anything stopping. The phone is on all three and keeps
+// its latest state retained there, so a reopened app shows it the moment the first one connects.
+// Messages are AES-GCM sealed here and on the phone; the brokers only carry ciphertext.
+//
+// All three open together. shiftr.io used to wait 5 s as a spare, but on 2026-10-25 EMQX and HiveMQ
+// could not be reached from home at all, so every opening sat on "Connecting…" for about 10 s.
 
-const BROKERS = ['wss://broker.emqx.io:8084/mqtt', 'wss://broker.hivemq.com:8884/mqtt'];
-// shiftr.io's public instance on port 443, for networks that let only web traffic through. The phone
-// is always on it too; the glasses join it only when neither broker above connects within 5 s.
-const SPARE = { url: 'wss://public.cloud.shiftr.io', username: 'public', password: 'public' };
-const SPARE_AFTER = 5000;
+const BROKERS = [
+  { url: 'wss://broker.emqx.io:8084/mqtt' },
+  { url: 'wss://broker.hivemq.com:8884/mqtt' },
+  { url: 'wss://public.cloud.shiftr.io', username: 'public', password: 'public' },
+];
 const OUTBOX_MAX_AGE = 60000;
+// A broker that connects late (or again) is also handed what went out in the last few seconds, so a
+// hello or press sent while only a broker without the phone was up still arrives. The phone ignores a
+// message it has already had (same command, same time).
+const RESEND_WINDOW = 10000;
 let links = [];
 let linkId = '';
-let spareTimer = 0;
 let linkDownSince = 0;    // when the page started waiting for a broker (0 while one is connected)
 let outbox = [];          // sealed presses waiting for a connection: { body, at, expects }
+let sentLately = [];      // sealed messages already out: { body, at }
 const recent = [];        // the last messages handled (the same one arrives from every broker)
 
 function linkUp() {
@@ -121,10 +128,7 @@ function linkUp() {
 
 function linkChanged() {
   if (linkUp()) linkDownSince = 0;
-  else {
-    if (!linkDownSince) linkDownSince = Date.now();
-    if (links.length && !spareTimer && !links.some((l) => l.spare)) spareTimer = setTimeout(openSpare, SPARE_AFTER);
-  }
+  else if (!linkDownSince) linkDownSince = Date.now();
   renderStateLine();
 }
 
@@ -155,11 +159,10 @@ function openLink() {
   }
   linkDownSince = Date.now();
   linkId = Array.from(crypto.getRandomValues(new Uint8Array(6)), (b) => b.toString(16).padStart(2, '0')).join('');
-  for (const url of BROKERS) addBroker(url);
-  spareTimer = setTimeout(openSpare, SPARE_AFTER);
+  for (const b of BROKERS) addBroker(b);
 }
 
-function addBroker(url, extra = {}) {
+function addBroker({ url, ...extra }) {
   const client = mqtt.connect(url, {
     clientId: `tgg-${linkId}-${links.length}`, clean: true, keepalive: 45, protocolVersion: 4,
     reconnectPeriod: 1500, connectTimeout: 8000, ...extra,
@@ -167,6 +170,9 @@ function addBroker(url, extra = {}) {
   client.on('connect', () => {
     client.subscribe([`bkr/${topic}/s`, `bkr/${topic}/snd`, `bkr/${topic}/lib`], { qos: 1 });
     linkChanged();
+    const now = Date.now();
+    sentLately = sentLately.filter((o) => now - o.at < RESEND_WINDOW);
+    for (const o of sentLately) client.publish(`bkr/${topic}/c`, o.body, { qos: 1 });
     flushOutbox();
     // After any (re)connect, ask the phone for the current sound rather than trust a copy a
     // broker kept.
@@ -182,18 +188,11 @@ function addBroker(url, extra = {}) {
   return client;
 }
 
-function openSpare() {
-  spareTimer = 0;
-  if (!links.length || linkUp() || links.some((l) => l.spare)) return;
-  addBroker(SPARE.url, { username: SPARE.username, password: SPARE.password }).spare = true;
-}
-
 function closeLink() {
   const old = links;
   links = [];
   linkDownSince = 0;
-  clearTimeout(spareTimer);
-  spareTimer = 0;
+  sentLately = [];
   for (const l of old) { try { l.end(true); } catch (e) { /* already closed */ } }
 }
 
@@ -206,6 +205,7 @@ function flushOutbox() {
   for (const o of due) {
     if (o.expects && !pendingSince) pendingSince = Date.now();
     for (const l of live) l.publish(`bkr/${topic}/c`, o.body, { qos: 1 });
+    sentLately.push({ body: o.body, at: now });
   }
 }
 
@@ -224,6 +224,8 @@ async function send(c, extra = {}) {
   // The oldest unanswered request counts: asking again must not reset the clock on a silent phone.
   if (expects && !pendingSince) pendingSince = Date.now();
   for (const l of live) l.publish(`bkr/${topic}/c`, body, { qos: 1 });
+  sentLately.push({ body, at: Date.now() });
+  if (sentLately.length > 40) sentLately.shift();
   return true;
 }
 
@@ -253,6 +255,7 @@ async function handle(text, retained = false) {
     if (state && m.at < state.at) return;
     prevState = state;
     state = m;
+    if (playIntent && !!m.play === playIntent.want) clearIntent();
     if (hasTrack()) startingSince = 0;
     if (volPreview != null && !volTimer) volPreview = null;
     renderNow();
@@ -628,7 +631,7 @@ function renderNow() {
     wrap.classList.remove('has-art');
   }
 
-  const playing = !!(s && s.play);
+  const playing = shownPlaying();
   shown($('playIcon'), !playing);
   shown($('pauseIcon'), playing);
   $('toggle').setAttribute('aria-label', playing ? 'Pause' : (track || (s && s.ses) ? 'Play' : 'Start Tidal and play'));
@@ -741,6 +744,24 @@ let confirmTimer = 0;
 // song shows up, or says what to do if Tidal never starts.
 let startingSince = 0;
 
+// A play or pause press shows on the button at once instead of a round trip later; the phone's state
+// then confirms it. Unconfirmed after 5 s (the press goes out again at 2.5 s), the button goes back to
+// what the phone last said. The "Playing"/"Paused" line and the live dot only ever show the phone's word.
+const INTENT_MS = 5000;
+let playIntent = null; // { want, at }
+let intentTimer = 0;
+
+function shownPlaying() {
+  if (playIntent && Date.now() - playIntent.at < INTENT_MS) return playIntent.want;
+  return !!(state && state.play);
+}
+
+function clearIntent() {
+  playIntent = null;
+  clearTimeout(intentTimer);
+  intentTimer = 0;
+}
+
 function press(c, extra) {
   lastAction = c;
   if (c === 'play' && !hasTrack()) {
@@ -748,6 +769,12 @@ function press(c, extra) {
     renderNow(); // the headline says "Starting…" at once
   } else if (startingSince) {
     startingSince = 0; // any other press ends the "didn't start" message
+    renderNow();
+  }
+  if ((c === 'play' || c === 'pause') && hasTrack()) {
+    clearIntent();
+    playIntent = { want: c === 'play', at: Date.now() };
+    intentTimer = setTimeout(() => { clearIntent(); renderNow(); }, INTENT_MS);
     renderNow();
   }
   send(c, extra);
@@ -1666,7 +1693,8 @@ function wire() {
   document.addEventListener('keydown', wakeUp, true);
   document.addEventListener('pointerdown', wakeUp, true);
   document.addEventListener('click', wakeUp, true);
-  $('toggle').addEventListener('click', () => press(state && state.play ? 'pause' : 'play'));
+  // From what the button shows, so a second tap before the phone answers undoes the first.
+  $('toggle').addEventListener('click', () => press(shownPlaying() ? 'pause' : 'play'));
   $('prev').addEventListener('click', () => press('prev'));
   $('next').addEventListener('click', () => press('next'));
   $('like').addEventListener('click', () => press('like'));
