@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="application-name" content="Tidal Glass">
+  <meta name="description" content="Tidal now playing and controls for Meta Ray-Ban Display, linked to the Tidal Glass app on your phone.">
+  <meta name="robots" content="noindex, nofollow">
+  <title>Tidal Glass</title>
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main>
+    <section id="now" class="screen" aria-label="Now playing">
+      <p id="status" class="status">Connecting to your phone…</p>
+      <div class="track">
+        <img id="art" class="art" alt="" hidden>
+        <div class="words">
+          <h1 id="title">Tidal Glass</h1>
+          <p id="artist" class="artist"></p>
+          <p id="album" class="dim"></p>
+        </div>
+      </div>
+      <div class="progress" aria-hidden="true"><div id="bar"></div></div>
+      <div class="times dim"><span id="elapsed"></span><span id="total"></span></div>
+      <div class="row main">
+        <button id="prev" aria-label="Previous track">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 5h2v14H6zM20 5v14L9.5 12z"/></svg>
+        </button>
+        <button id="toggle" class="primary" aria-label="Play">
+          <svg id="playIcon" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>
+          <svg id="pauseIcon" viewBox="0 0 24 24" aria-hidden="true" hidden><path d="M6 5h4v14H6zM14 5h4v14h-4z"/></svg>
+        </button>
+        <button id="next" aria-label="Next track">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 5h2v14h-2zM4 5v14l10.5-7z"/></svg>
+        </button>
+      </div>
+      <div class="row small">
+        <button id="like" aria-label="Like" aria-pressed="false">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20.5 4.2 12.9A4.9 4.9 0 0 1 12 6.6a4.9 4.9 0 0 1 7.8 6.3z"/></svg>
+        </button>
+        <button id="queue" aria-label="Up next">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16v2H4zm0 5h16v2H4zm0 5h10v2H4z"/></svg>
+        </button>
+        <button id="library" aria-label="Library">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h4v4H4zm6 0h4v4h-4zm6 0h4v4h-4zM4 10h4v4H4zm6 0h4v4h-4zm6 0h4v4h-4zM4 16h4v4H4zm6 0h4v4h-4zm6 0h4v4h-4z"/></svg>
+        </button>
+        <button id="voldown" aria-label="Volume down">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9h4l5-4v14l-5-4H4zm12 2h5v2h-5z"/></svg>
+        </button>
+        <button id="volup" aria-label="Volume up">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9h4l5-4v14l-5-4H4zm13 2v-3h2v3h3v2h-3v3h-2v-3h-3v-2z"/></svg>
+        </button>
+      </div>
+    </section>
+
+    <section id="list" class="screen" aria-labelledby="listTitle" hidden>
+      <h2 id="listTitle">Up next</h2>
+      <p id="listNote" class="dim"></p>
+      <ol id="items"></ol>
+      <div class="row small">
+        <button id="back" class="text">Back</button>
+        <button id="more" class="text" hidden>More</button>
+      </div>
+    </section>
+
+    <section id="setup" class="screen" hidden>
+      <h1>Tidal Glass</h1>
+      <p class="artist">Not paired with your phone yet.</p>
+      <p class="dim">Open Tidal Glass on your phone and tap “Put Tidal on my glasses”.</p>
+    </section>
+  </main>
+  <script src="app.js"></script>
+</body>
+</html>
