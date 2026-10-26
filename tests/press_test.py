@@ -644,6 +644,74 @@ with sync_playwright() as p:
     source = page.evaluate("fetch('app.js').then(r => r.text())")
     check("no daily-limit message left", "busy for today" not in source and "ntfy.sh" not in source)
 
+    # 46-50. Seeking (Bakar 2026-10-26: "seeking back and forth ... a weird delay and issues with syncing"). Two causes: the bar snapped back to
+    # the old position after the seek was sent, until the phone's answer arrived; and the position was carried forward with the PHONE's
+    # clock, so a glasses clock a few seconds off showed a wrong position. Each check runs on its own so an older build reports every one.
+    SEEK_STATE = {**STATE, "play": True, "pos": 50000, "dur": 200000, "seek": True}
+
+    def seek_fresh():
+        reset()
+        page.evaluate("""s => { clearTimeout(seekTimer); seekPreview = null;
+          if (typeof seekHold !== 'undefined') { seekHold = null; clearTimeout(seekResendTimer); clockOffset = null; }
+          state = {...s, at: Date.now()}; lastHeard = Date.now(); renderNow(); }""", SEEK_STATE)
+
+    NAME46 = "46 a seek swipe shows at once, sends one seek about 0.3 s later, and the bar stays at the target (it does not snap back)"
+    def t46():
+        seek_fresh()
+        page.evaluate("nudgeSeek(1)")
+        shown = page.evaluate("position()")
+        page.wait_for_timeout(500)
+        sent = page.evaluate("async () => Promise.all(window.__sent.map(async b => await openMessage(b)))")
+        seeks = [m for m in sent if m.get("c") == "seek"]
+        after = page.evaluate("position()")
+        ok = shown >= 59000 and len(seeks) == 1 and abs(seeks[0]["ms"] - 60000) < 1500 and after >= 59000
+        check(NAME46, ok, json.dumps([shown, [m.get("ms") for m in seeks], after]))
+    guard(NAME46, t46)
+
+    NAME47 = "47 a stale state (old position) does not pull the bar back; a state that agrees releases it"
+    def t47():
+        seek_fresh()
+        page.evaluate("nudgeSeek(1)")
+        page.wait_for_timeout(450)
+        page.evaluate("async s => { await handle(await seal({...s, pos: 50000, at: Date.now()})); }", SEEK_STATE)
+        held = page.evaluate("[position(), typeof seekHold !== 'undefined' && !!seekHold]")
+        page.evaluate("async s => { await handle(await seal({...s, pos: 61000, at: Date.now()})); }", SEEK_STATE)
+        released = page.evaluate("[position(), typeof seekHold !== 'undefined' && !!seekHold]")
+        ok = held[0] >= 59000 and held[1] and not released[1] and abs(released[0] - 61000) < 1500
+        check(NAME47, ok, json.dumps([held, released]))
+    guard(NAME47, t47)
+
+    NAME48 = "48 nothing confirms the seek: it is sent once more after 1.8 s, and the bar gives up after 5 s and shows the phone's position"
+    def t48():
+        seek_fresh()
+        page.evaluate("nudgeSeek(1)")
+        page.wait_for_timeout(2400)
+        sent = page.evaluate("async () => Promise.all(window.__sent.map(async b => await openMessage(b)))")
+        seeks = [m for m in sent if m.get("c") == "seek"]
+        page.evaluate("if (typeof seekHold !== 'undefined' && seekHold) seekHold.until = Date.now() - 1")
+        back = page.evaluate("[position(), typeof seekHold !== 'undefined' && !!seekHold]")
+        ok = len(seeks) == 2 and abs(back[0] - 50000 - 2900) < 4000 and not back[1]
+        check(NAME48, ok, json.dumps([[m.get("ms") for m in seeks], back]))
+    guard(NAME48, t48)
+
+    NAME49 = "49 a phone clock 5 s behind the glasses' does not move the bar (position is carried forward from arrival)"
+    def t49():
+        seek_fresh()
+        page.evaluate("async s => { if (typeof clockOffset !== 'undefined') clockOffset = null; state = {...s, at: Date.now() - 200000}; await handle(await seal({...s, pos: 50000, at: Date.now() - 5000})); }", SEEK_STATE)
+        pos = page.evaluate("position()")
+        check(NAME49, 49000 <= pos <= 52000, json.dumps(pos))
+    guard(NAME49, t49)
+
+    NAME50 = "50 a stored (retained) copy never sets the clock offset; a live one does"
+    def t50():
+        seek_fresh()
+        page.evaluate("async s => { if (typeof clockOffset !== 'undefined') clockOffset = null; state = {...s, at: Date.now() - 200000}; await handle(await seal({...s, at: Date.now() - 60000}), true); }", SEEK_STATE)
+        after_retained = page.evaluate("typeof clockOffset === 'undefined' ? null : clockOffset")
+        page.evaluate("async s => { await handle(await seal({...s, at: Date.now() - 3000})); }", SEEK_STATE)
+        after_live = page.evaluate("typeof clockOffset === 'undefined' ? null : clockOffset")
+        check(NAME50, after_retained is None and after_live is not None and 2500 <= after_live <= 4500, json.dumps([after_retained, after_live]))
+    guard(NAME50, t50)
+
     check("no page errors", not errors, "; ".join(errors))
     browser.close()
 

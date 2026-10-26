@@ -46,6 +46,17 @@ let seekPreview = null;
 let seekTimer = 0;
 let seekStreak = 0;
 let lastSeekKey = 0;
+// After a seek is sent the bar stays where the swipe put it until the phone's own position agrees (2026-10-26: it snapped back to
+// the old position for a second or two, then jumped). {target, at, ti, until, resent}: target in ms at time `at` on THIS clock.
+const SEEK_HOLD_MS = 5000;     // give up waiting for the phone after this
+const SEEK_AGREE_MS = 2500;    // the phone agrees when its position is this close to where the swipe should have got to
+const SEEK_RESEND_MS = 1800;   // a seek is absolute, so it is safe to send once more if nothing confirmed it
+const SEEK_DEBOUNCE_MS = 280;  // one message for a burst of swipes (was 500)
+let seekHold = null;
+let seekResendTimer = 0;
+// The phone stamps each state with its own clock ("at"). The glasses' clock can differ by seconds, so the position is carried
+// forward from when the state ARRIVED here, corrected by the smallest arrival delay seen (offset = glasses clock - phone clock).
+let clockOffset = null;
 
 let volPreview = null;             // volume shown while adjusting, before the phone confirms
 let volTimer = 0;
@@ -373,8 +384,13 @@ async function handle(text, retained = false) {
   if (m.t === 'state') {
     // A broker that missed some updates can hand over an older copy on connect; keep the newest.
     if (state && m.at < state.at) return;
+    if (!retained && typeof m.at === 'number') {
+      const d = Date.now() - m.at;
+      clockOffset = clockOffset == null ? d : Math.min(clockOffset, d);
+    }
     prevState = state;
     state = m;
+    settleSeekHold();
     if (playIntent && !!m.play === playIntent.want) clearIntent();
     if (hasTrack()) startingSince = 0;
     if (volPreview != null && !volTimer) volPreview = null;
@@ -536,11 +552,46 @@ function refreshTip() {
 
 // ---- Now Playing -------------------------------------------------------------------------
 
+// Where the phone's playback is now, from its last state: its position when it was sent, carried forward on this clock.
+function reportedPosition(s = state) {
+  const sent = s.at + (clockOffset == null ? 0 : clockOffset);
+  const p = s.pos + (s.play ? Math.max(0, Date.now() - sent) : 0);
+  return Math.max(0, Math.min(p, s.dur));
+}
+
 function position() {
   if (!state || !state.dur) return 0;
   if (seekPreview != null) return seekPreview;
-  const p = state.pos + (state.play ? Date.now() - state.at : 0);
-  return Math.max(0, Math.min(p, state.dur));
+  if (seekHold && Date.now() > seekHold.until) seekHold = null;
+  if (seekHold) {
+    const p = seekHold.target + (state.play ? Date.now() - seekHold.at : 0);
+    return Math.max(0, Math.min(p, state.dur));
+  }
+  return reportedPosition();
+}
+
+// The phone's position agrees with the seek that was sent (or the song changed, or it took too long): show the phone's again.
+function settleSeekHold() {
+  if (!seekHold || !state) return;
+  const expected = seekHold.target + (state.play ? Date.now() - seekHold.at : 0);
+  if (state.ti !== seekHold.ti || Date.now() > seekHold.until || Math.abs(reportedPosition() - expected) <= SEEK_AGREE_MS) {
+    seekHold = null;
+    clearTimeout(seekResendTimer);
+    seekResendTimer = 0;
+  }
+}
+
+function sendSeek(target) {
+  send('seek', { ms: Math.round(target) });
+  if (!state) return;
+  seekHold = { target, at: Date.now(), ti: state.ti, until: Date.now() + SEEK_HOLD_MS };
+  clearTimeout(seekResendTimer);
+  seekResendTimer = setTimeout(() => {
+    seekResendTimer = 0;
+    if (!seekHold || !state) return;
+    // Nothing confirmed it: say it once more, from where the swipe should have got to by now.
+    send('seek', { ms: Math.round(Math.min(seekHold.target + (state.play ? Date.now() - seekHold.at : 0), state.dur)) });
+  }, SEEK_RESEND_MS);
 }
 
 function hasTrack() {
@@ -935,8 +986,9 @@ function nudgeSeek(direction) {
     const target = seekPreview;
     seekPreview = null;
     seekStreak = 0;
-    send('seek', { ms: Math.round(target) });
-  }, 500);
+    sendSeek(target);
+    tick();
+  }, SEEK_DEBOUNCE_MS);
 }
 
 // ---- volume: buttons ---------------------------------------------------------------------
