@@ -30,6 +30,7 @@ window.mqtt = { connect(url, opts) {
     on(ev, fn) { (h[ev] = h[ev] || []).push(fn); return c; },
     once(ev, fn) { const w = (...a) => { h[ev] = (h[ev] || []).filter((f) => f !== w); fn(...a); }; return c.on(ev, w); },
     subscribe() {}, publish(t, body) { c.sent.push(body); }, end() { c.connected = false; },
+    reconnect() { c.tries = (c.tries || 0) + 1; },
     fire(ev, ...a) {
       if (ev === 'connect') c.connected = true;
       if (ev === 'close' || ev === 'offline') c.connected = false;
@@ -160,6 +161,24 @@ with sync_playwright() as p:
         check(NAME6, early == 3 and after.count("public.cloud.shiftr.io") == 2 and left.count("shiftr") == 1 and dropped,
               json.dumps([early, after, left, dropped]))
     guard(NAME6, t6)
+
+    # 7. 2026-10-25 20:08 link report: without signal the page tried every broker about every 2 s for 8.5 minutes.
+    # Retries now back off: 1 s for three tries, then doubling to 30 s with nothing connected; a broker that keeps
+    # failing while another carries the link backs off to 10 min.
+    NAME7 = "retries back off without signal (1 s x3, then up to 30 s; 10 min while another broker works)"
+    def t7():
+        d = page.evaluate("[1, 2, 3, 4, 5, 6, 8, 12].map((n) => retryDelay(n, false)).concat([retryDelay(2, true), retryDelay(12, true)])")
+        rp = page.evaluate("window.__clients.every((c) => c.opts.reconnectPeriod === 0)")
+        # a close with nothing connected schedules a manual try about 1 s later
+        page.evaluate("closeLink(); openLink();")
+        page.wait_for_timeout(100)
+        n0 = page.evaluate("window.__clients.length")
+        page.evaluate("(i) => { const c = window.__clients[i]; c.fire('close'); }", n0 - 1)
+        page.wait_for_timeout(1300)
+        tried = page.evaluate("(i) => window.__clients[i].tries || 0", n0 - 1)
+        ok = d == [1000, 1000, 1000, 2000, 4000, 8000, 30000, 30000, 4000, 600000] and rp and tried == 1
+        check(NAME7, ok, json.dumps([d, rp, tried]))
+    guard(NAME7, t7)
 
     check("no page errors", not errors, "; ".join(errors))
     browser.close()

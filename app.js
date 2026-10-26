@@ -131,7 +131,7 @@ function linkUp() {
 // (Bakar 2026-10-25: there a press waited 20-60 s for a broker; on a PC 2 s). Sent sealed once per
 // visit, on its first broker connect, with the previous visit's whole record (kept here when the page
 // is hidden, so a visit that never reached the phone still gets reported). The phone ignores it.
-const BUILD = 16;
+const BUILD = 17;
 let visit = null;
 let hiddenAt = 0;
 
@@ -206,6 +206,7 @@ function armHedge() {
 function dropSpareShiftr(kept) {
   for (const l of links.filter((x) => x !== kept && x.host === 'shiftr')) {
     links = links.filter((x) => x !== l);
+    clearTimeout(l.retryTimer);
     try { l.end(true); } catch (e) { /* already closed */ }
   }
 }
@@ -241,18 +242,41 @@ function openLink() {
   armHedge();
 }
 
+// Retries are scheduled here, not by mqtt.js (reconnectPeriod 0). The glasses' link report of 2026-10-25 20:08 showed
+// a page left open without signal trying every broker about every 2 s for 8.5 minutes (205 tries to shiftr alone),
+// which keeps the radio awake. Now: 1 s for the first three tries, then doubling to 30 s while nothing is connected;
+// a broker that keeps failing while another carries the link backs off to 10 min. A connect, a network change
+// ('online') or a new visit starts it fast again (each opens fresh links).
+function retryDelay(fails, othersUp) {
+  if (othersUp) return Math.min(600000, 1000 * 2 ** Math.min(fails, 10));
+  return fails <= 3 ? 1000 : Math.min(30000, 1000 * 2 ** (fails - 3));
+}
+
+function scheduleRetry(client) {
+  if (client.retryTimer || !links.includes(client) || client.connected) return;
+  client.fails = (client.fails || 0) + 1;
+  client.retryTimer = setTimeout(() => {
+    client.retryTimer = 0;
+    if (!links.includes(client) || client.connected) return;
+    noteLink(client.host, 'try');
+    try { client.reconnect(); } catch (e) { scheduleRetry(client); }
+  }, retryDelay(client.fails, linkUp()));
+}
+
 // Connect timeout 6 s (was 8 s): the slowest successful connect the glasses reported was 4.1 s, and every try
 // that hangs costs the whole timeout before the next one.
 let clientSeq = 0;
 function addBroker({ url, ...extra }) {
   const client = mqtt.connect(url, {
     clientId: `tgg-${linkId}-${clientSeq++}`, clean: true, keepalive: 45, protocolVersion: 4,
-    reconnectPeriod: 1000, connectTimeout: 6000, ...extra,
+    reconnectPeriod: 0, connectTimeout: 6000, ...extra,
   });
   const host = new URL(url).hostname.split('.').slice(-2, -1)[0]; // emqx, hivemq, shiftr
   client.host = host;
-  client.on('reconnect', () => noteLink(host, 'try'));
   client.on('connect', () => {
+    client.fails = 0;
+    clearTimeout(client.retryTimer);
+    client.retryTimer = 0;
     if (host === 'shiftr') {
       // The other shiftr connection got there first: this one is not needed.
       if (links.some((l) => l !== client && l.host === 'shiftr' && l.connected)) { dropSpareShiftr(links.find((l) => l !== client && l.host === 'shiftr' && l.connected)); return; }
@@ -275,8 +299,8 @@ function addBroker({ url, ...extra }) {
   // the page listens as not retained.
   client.on('message', (t, payload, packet) => handle(new TextDecoder().decode(payload), !!(packet && packet.retain)));
   client.on('offline', linkChanged);
-  client.on('close', linkChanged);
-  client.on('error', (e) => noteLink(host, 'err', e)); // mqtt.js reconnects by itself
+  client.on('close', () => { linkChanged(); scheduleRetry(client); });
+  client.on('error', (e) => noteLink(host, 'err', e));
   links.push(client);
   return client;
 }
@@ -288,7 +312,7 @@ function closeLink() {
   sentLately = [];
   clearTimeout(hedgeTimer);
   hedgeTimer = 0;
-  for (const l of old) { try { l.end(true); } catch (e) { /* already closed */ } }
+  for (const l of old) { clearTimeout(l.retryTimer); try { l.end(true); } catch (e) { /* already closed */ } }
 }
 
 function flushOutbox() {
