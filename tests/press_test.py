@@ -652,7 +652,7 @@ with sync_playwright() as p:
     def seek_fresh():
         reset()
         page.evaluate("""s => { clearTimeout(seekTimer); seekPreview = null;
-          if (typeof seekHold !== 'undefined') { seekHold = null; clearTimeout(seekResendTimer); clockOffset = null; }
+          if (typeof seekHold !== 'undefined') { seekHold = null; clearTimeout(seekResendTimer); clockOffset = null; clockSamples = 0; }
           state = {...s, at: Date.now()}; lastHeard = Date.now(); renderNow(); }""", SEEK_STATE)
 
     NAME46 = "46 a seek swipe shows at once, sends one seek about 0.4 s later, and the bar stays at the target (it does not snap back)"
@@ -746,13 +746,11 @@ with sync_playwright() as p:
         check(NAME52, names.count("seek") == 1 and "next" in names and not held, json.dumps([names, held]))
     guard(NAME52, t52)
 
-    NAME53 = "53 swipes 350 ms apart keep accelerating and go out as one or two seeks, not one per swipe"
+    NAME53 = "53 swipes 300 ms apart keep accelerating and go out as one or two seeks, not one per swipe"
     def t53():
         seek_fresh()
-        for _ in range(6):
-            page.evaluate("nudgeSeek(1)")
-            page.wait_for_timeout(350)
-        page.wait_for_timeout(700)
+        page.evaluate("async () => { for (let i = 0; i < 6; i++) { nudgeSeek(1); await new Promise(r => setTimeout(r, 300)); } }")
+        page.wait_for_timeout(800)
         sent = page.evaluate("async () => Promise.all(window.__sent.map(async b => await openMessage(b)))")
         seeks = [m.get("ms") for m in sent if m.get("c") == "seek"]
         check(NAME53, 1 <= len(seeks) <= 2 and max(seeks) >= 100000, json.dumps(seeks))
@@ -779,6 +777,46 @@ with sync_playwright() as p:
         held = page.evaluate("typeof seekHold !== 'undefined' && !!seekHold")
         check(NAME55, not held, json.dumps(held))
     guard(NAME55, t55)
+
+    NAME54B = "54b the phone resuming after a swipe made while paused: the bar follows the phone's position, not the target plus elapsed"
+    def t54b():
+        seek_fresh()
+        page.evaluate("s => { state = {...s, play: false, at: Date.now()}; renderNow(); }", SEEK_STATE)
+        page.evaluate("nudgeSeek(1)")
+        page.wait_for_timeout(750)
+        page.evaluate("async s => { await handle(await seal({...s, play: true, pos: 60300, at: Date.now()})); }", SEEK_STATE)
+        a = page.evaluate("position()")
+        check(NAME54B, abs(a - 60300) < 600, json.dumps(a))
+    guard(NAME54B, t54b)
+
+    NAME56 = "56 Next pressed while a swipe is still inside its debounce: that swipe is never sent"
+    def t56():
+        seek_fresh()
+        page.evaluate("nudgeSeek(1); press('next')")
+        page.wait_for_timeout(900)
+        sent = page.evaluate("async () => Promise.all(window.__sent.map(async b => await openMessage(b)))")
+        names = [m.get("c") for m in sent]
+        check(NAME56, "seek" not in names and "next" in names, json.dumps(names))
+    guard(NAME56, t56)
+
+    NAME57 = "57 a seek to the very end of the song is never repeated by the resend"
+    def t57():
+        seek_fresh()
+        page.evaluate("s => { state = {...s, pos: 199000, at: Date.now()}; renderNow(); }", SEEK_STATE)
+        page.evaluate("nudgeSeek(1)")
+        page.wait_for_timeout(2900)
+        sent = page.evaluate("async () => Promise.all(window.__sent.map(async b => await openMessage(b)))")
+        seeks = [m.get("ms") for m in sent if m.get("c") == "seek"]
+        check(NAME57, len(seeks) == 1, json.dumps(seeks))
+    guard(NAME57, t57)
+
+    NAME58 = "58 the clock offset reaches the link report of a visit (co)"
+    def t58():
+        seek_fresh()
+        page.evaluate("""async s => { state = {...s, at: Date.now() - 200000}; startVisit('load'); for (let i = 0; i < 3; i++) await handle(await seal({...s, pos: 50000, at: Date.now() - 2000 + i})); }""", SEEK_STATE)
+        co = page.evaluate("visit && visit.co")
+        check(NAME58, isinstance(co, (int, float)) and 1500 < co < 2600, json.dumps(co))
+    guard(NAME58, t58)
 
     check("no page errors", not errors, "; ".join(errors))
     browser.close()

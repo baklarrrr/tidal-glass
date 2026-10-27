@@ -51,7 +51,7 @@ let lastSeekKey = 0;
 const SEEK_HOLD_MS = 5000;     // give up waiting for the phone after this
 const SEEK_AGREE_MS = 2500;    // the phone agrees when its position is this close to where the swipe should have got to
 const SEEK_RESEND_MS = 1800;   // a seek is absolute, so it is safe to send once more if nothing confirmed it
-const SEEK_DEBOUNCE_MS = 400;  // one message for a burst of swipes: swipes closer than this merge, and the 10, 10, 20, 30, 60 s steps keep growing
+const SEEK_DEBOUNCE_MS = 500;  // one message for a burst of swipes: swipes closer than this merge, and the 10, 10, 20, 30, 60 s steps keep growing
 let seekHold = null;
 let seekResendTimer = 0;
 // The phone stamps each state with its own clock ("at"). The glasses' clock can differ by seconds, so the position is carried
@@ -185,6 +185,7 @@ function noteLink(host, what, err) {
 
 function endVisit() {
   if (!visit) return;
+  visit.co = clockOffset;
   try { localStorage.setItem('tg.visit', JSON.stringify(visitRecord(visit))); } catch (e) { /* storage may be off */ }
   visit = null;
 }
@@ -390,6 +391,7 @@ async function handle(text, retained = false) {
       const d = Date.now() - m.at;
       clockOffset = clockOffset == null ? d : Math.min(d, clockOffset + 200); // the smallest delay seen, creeping up 200 ms a state so a clock step is followed
       clockSamples++;
+      if (visit) visit.co = clockOffset;
     }
     prevState = state;
     state = m;
@@ -569,6 +571,14 @@ function reportedPosition(s = state) {
   return Math.max(0, Math.min(p, s.dur));
 }
 
+// Another song is coming: forget the swipe still waiting to be sent as well as the held one.
+function cancelSeek() {
+  clearTimeout(seekTimer);
+  seekPreview = null;
+  seekStreak = 0;
+  dropSeekHold();
+}
+
 function dropSeekHold() {
   seekHold = null;
   clearTimeout(seekResendTimer);
@@ -614,6 +624,7 @@ function sendSeek(target) {
     // Nothing confirmed it: say it once more from where the swipe should have got to, but only while the page is on screen with a
     // link up, the song is the same, and nothing else has taken over the bar. A seek is absolute, so repeating it is safe.
     if (!seekHold || !state || document.visibilityState !== 'visible' || !linkUp() || seekPreview != null) return;
+    if (heldPosition() >= state.dur - 3000) return; // at the very end Tidal may already have moved on: never seek the next song to the old end
     send('seek', { ms: Math.round(heldPosition()) });
   }, SEEK_RESEND_MS);
 }
@@ -962,7 +973,7 @@ function clearIntent() {
 
 function press(c, extra) {
   lastAction = c;
-  if (c === 'next' || c === 'prev' || c === 'skip' || c === 'libplay') dropSeekHold(); // another song: a held seek or its resend would land on it
+  if (c === 'next' || c === 'prev' || c === 'skip' || c === 'libplay') cancelSeek(); // another song: a held seek or its resend would land on it
   if (c === 'play' && !hasTrack()) {
     startingSince = Date.now();
     renderNow(); // the headline says "Starting…" at once
@@ -1125,7 +1136,7 @@ function renderQueue(fresh) {
   $('listNote').textContent = q.length ? '' : 'Tidal is not sharing what plays next.';
   $('more').hidden = true;
   q.forEach((e) => items.appendChild(itemButton(e.id, e.ti, e.su, e.id === state.qa ? ICONS.note : ICONS.play, () => {
-    dropSeekHold();
+    cancelSeek();
     send('skip', { id: e.id });
     say(`Playing ${e.ti}`);
     history.back();
@@ -1157,7 +1168,7 @@ function renderLibrary(m, fromNetwork) {
       if (it.b) openFolder(it);
       else if (it.p) {
         lastAction = 'libplay';
-        dropSeekHold();
+        cancelSeek();
         send('libplay', { id: it.id });
         say(`Playing ${it.ti}`);
         leaveToNow();
