@@ -655,12 +655,12 @@ with sync_playwright() as p:
           if (typeof seekHold !== 'undefined') { seekHold = null; clearTimeout(seekResendTimer); clockOffset = null; }
           state = {...s, at: Date.now()}; lastHeard = Date.now(); renderNow(); }""", SEEK_STATE)
 
-    NAME46 = "46 a seek swipe shows at once, sends one seek about 0.3 s later, and the bar stays at the target (it does not snap back)"
+    NAME46 = "46 a seek swipe shows at once, sends one seek about 0.4 s later, and the bar stays at the target (it does not snap back)"
     def t46():
         seek_fresh()
         page.evaluate("nudgeSeek(1)")
         shown = page.evaluate("position()")
-        page.wait_for_timeout(500)
+        page.wait_for_timeout(650)
         sent = page.evaluate("async () => Promise.all(window.__sent.map(async b => await openMessage(b)))")
         seeks = [m for m in sent if m.get("c") == "seek"]
         after = page.evaluate("position()")
@@ -672,7 +672,7 @@ with sync_playwright() as p:
     def t47():
         seek_fresh()
         page.evaluate("nudgeSeek(1)")
-        page.wait_for_timeout(450)
+        page.wait_for_timeout(650)
         page.evaluate("async s => { await handle(await seal({...s, pos: 50000, at: Date.now()})); }", SEEK_STATE)
         held = page.evaluate("[position(), typeof seekHold !== 'undefined' && !!seekHold]")
         page.evaluate("async s => { await handle(await seal({...s, pos: 61000, at: Date.now()})); }", SEEK_STATE)
@@ -685,7 +685,7 @@ with sync_playwright() as p:
     def t48():
         seek_fresh()
         page.evaluate("nudgeSeek(1)")
-        page.wait_for_timeout(2400)
+        page.wait_for_timeout(2900)
         sent = page.evaluate("async () => Promise.all(window.__sent.map(async b => await openMessage(b)))")
         seeks = [m for m in sent if m.get("c") == "seek"]
         page.evaluate("if (typeof seekHold !== 'undefined' && seekHold) seekHold.until = Date.now() - 1")
@@ -694,12 +694,19 @@ with sync_playwright() as p:
         check(NAME48, ok, json.dumps([[m.get("ms") for m in seeks], back]))
     guard(NAME48, t48)
 
-    NAME49 = "49 a phone clock 5 s behind the glasses' does not move the bar (position is carried forward from arrival)"
+    NAME49 = "49 a phone clock 5 s behind the glasses' does not move the bar once three live states have shown the skew; the first slow state does not either"
     def t49():
         seek_fresh()
-        page.evaluate("async s => { if (typeof clockOffset !== 'undefined') clockOffset = null; state = {...s, at: Date.now() - 200000}; await handle(await seal({...s, pos: 50000, at: Date.now() - 5000})); }", SEEK_STATE)
+        page.evaluate("""async s => { if (typeof clockOffset !== 'undefined') { clockOffset = null; clockSamples = 0; }
+          state = {...s, at: Date.now() - 200000};
+          for (let i = 0; i < 3; i++) { await handle(await seal({...s, pos: 50000, at: Date.now() - 5000 + i})); await new Promise(r => setTimeout(r, 30)); } }""", SEEK_STATE)
         pos = page.evaluate("position()")
-        check(NAME49, 49000 <= pos <= 52000, json.dumps(pos))
+        # one slow first state with agreeing clocks (3 s in transit) must not set the bar 3 s behind
+        seek_fresh()
+        page.evaluate("""async s => { if (typeof clockOffset !== 'undefined') { clockOffset = null; clockSamples = 0; }
+          state = {...s, at: Date.now() - 200000}; await handle(await seal({...s, pos: 50000, at: Date.now() - 3000})); }""", SEEK_STATE)
+        slow = page.evaluate("position()")
+        check(NAME49, 49000 <= pos <= 52000 and 52500 <= slow <= 54500, json.dumps([pos, slow]))
     guard(NAME49, t49)
 
     NAME50 = "50 a stored (retained) copy never sets the clock offset; a live one does"
@@ -711,6 +718,67 @@ with sync_playwright() as p:
         after_live = page.evaluate("typeof clockOffset === 'undefined' ? null : clockOffset")
         check(NAME50, after_retained is None and after_live is not None and 2500 <= after_live <= 4500, json.dumps([after_retained, after_live]))
     guard(NAME50, t50)
+
+    NAME51 = "51 hiding the page cancels the resend: nothing goes out on return that would jump the music back"
+    def t51():
+        seek_fresh()
+        page.evaluate("nudgeSeek(1)")
+        page.wait_for_timeout(650)
+        page.evaluate("window.__sent.length = 0; Object.defineProperty(document, 'visibilityState', {configurable: true, get: () => 'hidden'}); document.dispatchEvent(new Event('visibilitychange'));")
+        page.wait_for_timeout(2600)
+        page.evaluate("Object.defineProperty(document, 'visibilityState', {configurable: true, get: () => 'visible'}); document.dispatchEvent(new Event('visibilitychange'));")
+        page.wait_for_timeout(700)
+        sent = page.evaluate("async () => Promise.all(window.__sent.map(async b => await openMessage(b)))")
+        seeks = [m for m in sent if m.get("c") == "seek"]
+        check(NAME51, len(seeks) == 0, json.dumps([m.get("ms") for m in seeks]))
+    guard(NAME51, t51)
+
+    NAME52 = "52 Next or Previous after a seek cancels the hold and the resend (the new song is never seeked to the old target)"
+    def t52():
+        seek_fresh()
+        page.evaluate("nudgeSeek(1)")
+        page.wait_for_timeout(650)
+        page.evaluate("press('next')")
+        page.wait_for_timeout(2400)
+        sent = page.evaluate("async () => Promise.all(window.__sent.map(async b => await openMessage(b)))")
+        names = [m.get("c") for m in sent]
+        held = page.evaluate("typeof seekHold !== 'undefined' && !!seekHold")
+        check(NAME52, names.count("seek") == 1 and "next" in names and not held, json.dumps([names, held]))
+    guard(NAME52, t52)
+
+    NAME53 = "53 swipes 350 ms apart keep accelerating and go out as one or two seeks, not one per swipe"
+    def t53():
+        seek_fresh()
+        for _ in range(6):
+            page.evaluate("nudgeSeek(1)")
+            page.wait_for_timeout(350)
+        page.wait_for_timeout(700)
+        sent = page.evaluate("async () => Promise.all(window.__sent.map(async b => await openMessage(b)))")
+        seeks = [m.get("ms") for m in sent if m.get("c") == "seek"]
+        check(NAME53, 1 <= len(seeks) <= 2 and max(seeks) >= 100000, json.dumps(seeks))
+    guard(NAME53, t53)
+
+    NAME54 = "54 play or pause arriving after a seek rebases the held position (the bar does not run on while the music is paused)"
+    def t54():
+        seek_fresh()
+        page.evaluate("nudgeSeek(1)")
+        page.wait_for_timeout(650)
+        page.evaluate("async s => { await handle(await seal({...s, play: false, pos: 50000, at: Date.now()})); }", SEEK_STATE)
+        a = page.evaluate("position()")
+        page.wait_for_timeout(1500)
+        b = page.evaluate("position()")
+        check(NAME54, abs(b - a) < 300, json.dumps([a, b]))
+    guard(NAME54, t54)
+
+    NAME55 = "55 a new song with the same title (different length) releases the hold"
+    def t55():
+        seek_fresh()
+        page.evaluate("nudgeSeek(1)")
+        page.wait_for_timeout(650)
+        page.evaluate("async s => { await handle(await seal({...s, dur: 180000, pos: 1000, at: Date.now()})); }", SEEK_STATE)
+        held = page.evaluate("typeof seekHold !== 'undefined' && !!seekHold")
+        check(NAME55, not held, json.dumps(held))
+    guard(NAME55, t55)
 
     check("no page errors", not errors, "; ".join(errors))
     browser.close()

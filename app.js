@@ -51,12 +51,13 @@ let lastSeekKey = 0;
 const SEEK_HOLD_MS = 5000;     // give up waiting for the phone after this
 const SEEK_AGREE_MS = 2500;    // the phone agrees when its position is this close to where the swipe should have got to
 const SEEK_RESEND_MS = 1800;   // a seek is absolute, so it is safe to send once more if nothing confirmed it
-const SEEK_DEBOUNCE_MS = 280;  // one message for a burst of swipes (was 500)
+const SEEK_DEBOUNCE_MS = 400;  // one message for a burst of swipes: swipes closer than this merge, and the 10, 10, 20, 30, 60 s steps keep growing
 let seekHold = null;
 let seekResendTimer = 0;
 // The phone stamps each state with its own clock ("at"). The glasses' clock can differ by seconds, so the position is carried
 // forward from when the state ARRIVED here, corrected by the smallest arrival delay seen (offset = glasses clock - phone clock).
 let clockOffset = null;
+let clockSamples = 0;
 
 let volPreview = null;             // volume shown while adjusting, before the phone confirms
 let volTimer = 0;
@@ -142,7 +143,7 @@ function linkUp() {
 // (Bakar 2026-10-25: there a press waited 20-60 s for a broker; on a PC 2 s). Sent sealed once per
 // visit, on its first broker connect, with the previous visit's whole record (kept here when the page
 // is hidden, so a visit that never reached the phone still gets reported). The phone ignores it.
-const BUILD = 17;
+const BUILD = 18;
 let visit = null;
 let hiddenAt = 0;
 
@@ -155,6 +156,7 @@ function startVisit(kind) {
     on: navigator.onLine,
     mq: typeof mqtt !== 'undefined',
     age: Math.round(performance.now()),
+    co: clockOffset, // the glasses' clock minus the phone's as last seen (ms, includes transit)
     b: {}, // per broker: n reconnect attempts, up ms to the first connect, e the last error
     at: now, sent: false,
   };
@@ -386,7 +388,8 @@ async function handle(text, retained = false) {
     if (state && m.at < state.at) return;
     if (!retained && typeof m.at === 'number') {
       const d = Date.now() - m.at;
-      clockOffset = clockOffset == null ? d : Math.min(clockOffset, d);
+      clockOffset = clockOffset == null ? d : Math.min(d, clockOffset + 200); // the smallest delay seen, creeping up 200 ms a state so a clock step is followed
+      clockSamples++;
     }
     prevState = state;
     state = m;
@@ -449,6 +452,7 @@ function onVisibility() {
       seekStreak = 0;
       send('seek', { ms: Math.round(target) });
     }
+    dropSeekHold(); // nothing is repeated while hidden: a resend queued now would go out on return and jump the music back
     if (volTimer) {
       clearTimeout(volTimer);
       volTimer = 0;
@@ -552,45 +556,65 @@ function refreshTip() {
 
 // ---- Now Playing -------------------------------------------------------------------------
 
+// The glasses' clock minus the phone's, from the live states seen so far. Until three have arrived (the first can be slow: a reconnect)
+// the clocks are taken to agree; after that the smallest arrival delay seen, less a nominal 150 ms of transit, is the skew.
+function clockSkew() {
+  return clockSamples >= 3 && clockOffset != null ? Math.max(-60000, Math.min(60000, clockOffset - 150)) : 0;
+}
+
 // Where the phone's playback is now, from its last state: its position when it was sent, carried forward on this clock.
 function reportedPosition(s = state) {
-  const sent = s.at + (clockOffset == null ? 0 : clockOffset);
+  const sent = s.at + clockSkew();
   const p = s.pos + (s.play ? Math.max(0, Date.now() - sent) : 0);
   return Math.max(0, Math.min(p, s.dur));
+}
+
+function dropSeekHold() {
+  seekHold = null;
+  clearTimeout(seekResendTimer);
+  seekResendTimer = 0;
 }
 
 function position() {
   if (!state || !state.dur) return 0;
   if (seekPreview != null) return seekPreview;
-  if (seekHold && Date.now() > seekHold.until) seekHold = null;
-  if (seekHold) {
-    const p = seekHold.target + (state.play ? Date.now() - seekHold.at : 0);
-    return Math.max(0, Math.min(p, state.dur));
-  }
+  if (seekHold && Date.now() > seekHold.until) dropSeekHold();
+  if (seekHold) return heldPosition();
   return reportedPosition();
+}
+
+// Where the held seek has got to by now: its target, carried forward only while the music was playing when it was sent (or since the
+// phone last said it started or stopped).
+function heldPosition() {
+  const p = seekHold.target + (seekHold.play ? Date.now() - seekHold.at : 0);
+  return Math.max(0, Math.min(p, state.dur));
 }
 
 // The phone's position agrees with the seek that was sent (or the song changed, or it took too long): show the phone's again.
 function settleSeekHold() {
   if (!seekHold || !state) return;
-  const expected = seekHold.target + (state.play ? Date.now() - seekHold.at : 0);
-  if (state.ti !== seekHold.ti || Date.now() > seekHold.until || Math.abs(reportedPosition() - expected) <= SEEK_AGREE_MS) {
-    seekHold = null;
-    clearTimeout(seekResendTimer);
-    seekResendTimer = 0;
+  if (state.ti !== seekHold.ti || state.dur !== seekHold.dur || Date.now() > seekHold.until) {
+    dropSeekHold();
+    return;
   }
+  if (!!state.play !== seekHold.play) {
+    // Play or pause changed since the swipe: carry the target forward under the old flag, then under the new one.
+    seekHold = { ...seekHold, target: heldPosition(), at: Date.now(), play: !!state.play };
+  }
+  if (Math.abs(reportedPosition() - heldPosition()) <= SEEK_AGREE_MS) dropSeekHold();
 }
 
 function sendSeek(target) {
   send('seek', { ms: Math.round(target) });
   if (!state) return;
-  seekHold = { target, at: Date.now(), ti: state.ti, until: Date.now() + SEEK_HOLD_MS };
+  seekHold = { target, at: Date.now(), ti: state.ti, dur: state.dur, play: !!state.play, until: Date.now() + SEEK_HOLD_MS };
   clearTimeout(seekResendTimer);
   seekResendTimer = setTimeout(() => {
     seekResendTimer = 0;
-    if (!seekHold || !state) return;
-    // Nothing confirmed it: say it once more, from where the swipe should have got to by now.
-    send('seek', { ms: Math.round(Math.min(seekHold.target + (state.play ? Date.now() - seekHold.at : 0), state.dur)) });
+    // Nothing confirmed it: say it once more from where the swipe should have got to, but only while the page is on screen with a
+    // link up, the song is the same, and nothing else has taken over the bar. A seek is absolute, so repeating it is safe.
+    if (!seekHold || !state || document.visibilityState !== 'visible' || !linkUp() || seekPreview != null) return;
+    send('seek', { ms: Math.round(heldPosition()) });
   }, SEEK_RESEND_MS);
 }
 
@@ -938,6 +962,7 @@ function clearIntent() {
 
 function press(c, extra) {
   lastAction = c;
+  if (c === 'next' || c === 'prev' || c === 'skip' || c === 'libplay') dropSeekHold(); // another song: a held seek or its resend would land on it
   if (c === 'play' && !hasTrack()) {
     startingSince = Date.now();
     renderNow(); // the headline says "Starting…" at once
@@ -985,7 +1010,6 @@ function nudgeSeek(direction) {
   seekTimer = setTimeout(() => {
     const target = seekPreview;
     seekPreview = null;
-    seekStreak = 0;
     sendSeek(target);
     tick();
   }, SEEK_DEBOUNCE_MS);
@@ -1101,6 +1125,7 @@ function renderQueue(fresh) {
   $('listNote').textContent = q.length ? '' : 'Tidal is not sharing what plays next.';
   $('more').hidden = true;
   q.forEach((e) => items.appendChild(itemButton(e.id, e.ti, e.su, e.id === state.qa ? ICONS.note : ICONS.play, () => {
+    dropSeekHold();
     send('skip', { id: e.id });
     say(`Playing ${e.ti}`);
     history.back();
@@ -1132,6 +1157,7 @@ function renderLibrary(m, fromNetwork) {
       if (it.b) openFolder(it);
       else if (it.p) {
         lastAction = 'libplay';
+        dropSeekHold();
         send('libplay', { id: it.id });
         say(`Playing ${it.ti}`);
         leaveToNow();
