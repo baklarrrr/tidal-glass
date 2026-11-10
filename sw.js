@@ -4,25 +4,41 @@
 // Network first, so an update shows up on the very next launch; the copy is only the fallback.
 // Only this site's own files are handled; the phone link (MQTT over WebSocket) and artwork always go
 // to the network.
-const CACHE = 'tidal-glass-v19';
-const SHELL = ['./', 'index.html', 'style.css', 'app.js', 'vendor/mqtt.min.js', 'icon.svg', 'icon-mono.svg'];
+const CACHE = 'tidal-glass-v20';
+const SHELL = ['./', 'index.html', 'style.css', 'app.js', 'vendor/mqtt.min.js', 'icon.svg', 'icon-mono.svg', 'sound/', 'sound/index.html', 'sound/icon-mono.svg'];
 
-// The copy is filled straight from the server too, never from the browser's own cache.
-self.addEventListener('install', (event) => {
-  event.waitUntil(caches.open(CACHE)
-    .then((cache) => cache.addAll(SHELL.map((u) => new Request(u, { cache: 'no-cache' }))))
-    .then(() => self.skipWaiting()));
+// An open pre-v20 page can send to Android even after the new worker claims it.
+// Carry the upgrade flag across the install/activate lifetime exactly once.
+const UPGRADE_FLAG = new URL('.reopen-for-phone-choice-v20', self.registration.scope).href;
+self.addEventListener('install', event => {
+  event.waitUntil((async () => {
+    const cache = await caches.open(CACHE);
+    await cache.addAll(SHELL.map(path => new Request(path, {cache: 'reload'})));
+    if (self.registration.active && CACHE === 'tidal-glass-v20') {
+      await cache.put(UPGRADE_FLAG, new Response('1'));
+    }
+    await self.skipWaiting();
+  })());
 });
 
-self.addEventListener('activate', (event) => {
-  event.waitUntil(
-    caches.keys()
-      // Every app on this origin shares Cache Storage. Remove only this app’s old shells.
-      .then((keys) => Promise.all(keys
-        .filter((key) => /^tidal-glass-v\d+$/.test(key) && key !== CACHE)
-        .map((key) => caches.delete(key))))
-      .then(() => self.clients.claim()),
-  );
+self.addEventListener('activate', event => {
+  event.waitUntil((async () => {
+    const cache = await caches.open(CACHE);
+    const reopenOldPages = await cache.delete(UPGRADE_FLAG);
+    const keys = await caches.keys();
+    await Promise.all(keys.filter(key => /^tidal-glass-v\d+$/.test(key) && key !== CACHE)
+      .map(key => caches.delete(key)));
+    await self.clients.claim();
+    if (!reopenOldPages) return;
+    const pages = await self.clients.matchAll({type: 'window'});
+    for (const page of pages) {
+      if (page.url.startsWith(self.registration.scope)) {
+        // Queue the navigation now. Its fetch must wait for activation to finish,
+        // so waiting for the navigation here would deadlock the open app.
+        page.navigate(page.url).catch(() => {});
+      }
+    }
+  })());
 });
 
 self.addEventListener('fetch', (event) => {

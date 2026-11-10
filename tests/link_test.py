@@ -59,11 +59,13 @@ def guard(name, fn):
 
 with sync_playwright() as p:
     browser = p.chromium.launch(channel="chrome")
-    page = browser.new_context(viewport={"width": 600, "height": 600}).new_page()
+    page = browser.new_context(viewport={"width": 600, "height": 600}, service_workers="block").new_page()
     errors = []
     page.on("pageerror", lambda e: errors.append(str(e)))
     page.route("**/vendor/mqtt.min.js", lambda r: r.fulfill(status=200, content_type="application/javascript", body=FAKE_MQTT))
     page.goto(URL)
+    page.locator("#useAndroid").click()
+    page.locator("#confirmAndroid").click()
     page.wait_for_function("typeof key !== 'undefined' && key !== null && window.__clients && window.__clients.length > 0")
     page.wait_for_timeout(400)
 
@@ -100,7 +102,7 @@ with sync_playwright() as p:
     def t3():
         h = hosts()
         hive, shiftr, emqx = h.index("broker.hivemq.com"), h.index("public.cloud.shiftr.io"), h.index("broker.emqx.io")
-        page.evaluate("send('next')")
+        page.evaluate("async () => { await handle(await seal({t: 'state', at: Date.now()})); await send('next'); }")
         page.wait_for_timeout(200)
         a, b, c = commands(hive), commands(shiftr), commands(emqx)
         check(NAME3, a.count("next") == 1 and b.count("next") == 1 and c == [], json.dumps([a, b, c]))
@@ -143,10 +145,12 @@ with sync_playwright() as p:
     # a second, fresh shiftr connection; the first shiftr connection to connect stays and the other is closed.
     NAME6 = "nothing connected for 3 s: a second shiftr try; the first to connect stays, the other closes"
     def t6():
-        hp = browser.new_context(viewport={"width": 600, "height": 600}).new_page()
+        hp = browser.new_context(viewport={"width": 600, "height": 600}, service_workers="block").new_page()
         hp.on("pageerror", lambda e: errors.append(str(e)))
         hp.route("**/vendor/mqtt.min.js", lambda r: r.fulfill(status=200, content_type="application/javascript", body=FAKE_MQTT))
         hp.goto(URL)
+        hp.locator("#useAndroid").click()
+        hp.locator("#confirmAndroid").click()
         hp.wait_for_function("window.__clients && window.__clients.length === 3")
         early = hp.evaluate("window.__clients.length")
         hp.wait_for_timeout(3400)

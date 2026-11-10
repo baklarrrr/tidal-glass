@@ -93,6 +93,142 @@ function readPairing() {
   return t && k ? { t, k } : null;
 }
 
+// A pairing identifies an Android relay. Only an explicit choice in this visible visit
+// permits contacting it. The glasses browser cannot identify the phone currently supplying audio.
+const OUTPUT_KEY = 'tg.output.v1';
+const READ_ONLY = new Set(['hello', 'snd', 'diag', 'lib']);
+const LIVE_WINDOW_MS = 30000;
+let pairing = null;
+let androidVisit = '';
+let connectionGeneration = 0;
+let liveAndroidAt = 0;
+let wired = false;
+
+function savedOutput() {
+  try { return localStorage.getItem(OUTPUT_KEY); } catch { return null; }
+}
+
+function isAndroidVisit() {
+  if (!androidVisit || document.visibilityState !== 'visible' || savedOutput() !== androidVisit) return false;
+  try {
+    const saved = JSON.parse(localStorage.getItem('tg.pair') || 'null');
+    return !!(saved && saved.t === pairing.t && saved.k === pairing.k);
+  } catch { return false; }
+}
+
+function canControlAndroid() {
+  return isAndroidVisit() && linkUp() && liveAndroidAt > 0 && Date.now() - liveAndroidAt < LIVE_WINDOW_MS;
+}
+
+function requireAndroid() {
+  if (canControlAndroid()) return true;
+  if (isAndroidVisit()) {
+    const msg = 'Waiting for Android. Try again when it answers.';
+    if (linkUp() && Date.now() - lastHello > 1500) {
+      lastHello = 0;
+      sayHello();
+    }
+    if (SOUND_SCREENS.has(view.screen)) soundNote(msg);
+    else say(msg);
+  }
+  return false;
+}
+
+function cancelPendingCommands() {
+  connectionGeneration++;
+  for (const waiter of waiters) waiter();
+  liveAndroidAt = 0;
+  outbox = [];
+  sentLately = [];
+  clearTimeout(confirmTimer);
+  confirmTimer = 0;
+  clearTimeout(volTimer);
+  volTimer = 0;
+  volPreview = null;
+  cancelSeek();
+  clearIntent();
+  dropPendingSound();
+  for (const [id, timer] of armed) {
+    clearTimeout(timer);
+    const button = $(id);
+    if (button && button.dataset.label) (button.querySelector('span') || button).textContent = button.dataset.label;
+  }
+  armed.clear();
+}
+
+function leaveAndroid() {
+  androidVisit = '';
+  closeLink();
+  stopTick();
+  state = prevState = snd = sndConfirmed = sndPending = null;
+  lastHeard = heardLive = pendingSince = lastHello = sndAsked = sndAt = sndEditAt = startingSince = 0;
+  recent.length = 0;
+  libCache.clear();
+  endVisit();
+}
+
+function deviceScreen(mode, message = '') {
+  for (const el of document.querySelectorAll('main > section')) el.hidden = el.id !== 'setup';
+  document.body.classList.remove('calm');
+  const iphone = mode === 'iphone';
+  const android = mode === 'confirm';
+  $('setupTitle').textContent = iphone ? 'iPhone playback' : android ? 'Control the paired Android?' : 'Choose your phone';
+  $('setupOption').textContent = iphone ? 'In TIDAL on iPhone, open Now Playing and tap the speaker icon.'
+    : android ? 'Play, volume and sound changes go to your paired Android phone.' : (APP_MODE === 'sound' ? 'Sound Lab' : 'Tidal Glass');
+  $('setupHint').textContent = message || (iphone ? 'Choose AirPlay & Bluetooth, then your Meta Ray-Ban Display.'
+    : android ? 'Music may play on its speaker. Check the Android audio output first.'
+    : 'iPhone uses Bluetooth. Android uses its own audio output.');
+  if (android && !pairing) {
+    $('setupTitle').textContent = 'Connect your Android';
+    $('setupOption').textContent = 'Sound and playback controls need the Tidal Glass companion.';
+  }
+  $('useIphone').hidden = $('useAndroid').hidden = iphone || android;
+  $('confirmAndroid').hidden = !android || !pairing;
+  $('chooseAgain').hidden = !iphone && !android;
+  const first = iphone || (android && !pairing) ? 'chooseAgain' : android ? 'confirmAndroid' : 'useIphone';
+  $(first).focus();
+}
+
+function choosePhone() {
+  leaveAndroid();
+  try { localStorage.setItem(OUTPUT_KEY, 'choose'); } catch { /* iPhone guidance also works offline */ }
+  deviceScreen('choose');
+}
+
+async function controlAndroid() {
+  if (!pairing || document.visibilityState !== 'visible' || $('setup').hidden || $('confirmAndroid').hidden) return;
+  const generation = connectionGeneration;
+  const requestedPair = pairing;
+  const visitId = 'android:' + toB64url(crypto.getRandomValues(new Uint8Array(12)));
+  try {
+    const selectedKey = await crypto.subtle.importKey('raw', fromB64url(requestedPair.k), 'AES-GCM', false, ['encrypt','decrypt']);
+    if (generation !== connectionGeneration || requestedPair !== pairing || document.visibilityState !== 'visible'
+        || $('setup').hidden || $('confirmAndroid').hidden) return;
+    localStorage.setItem(OUTPUT_KEY, visitId);
+    key = selectedKey;
+  } catch {
+    deviceScreen('confirm', 'Open a fresh Android pairing link and try again.');
+    return;
+  }
+  androidVisit = visitId;
+  if (!isAndroidVisit()) { choosePhone(); return; }
+  topic = pairing.t;
+  $('setup').hidden = true;
+  if (!wired) {
+    wire();
+    if (APP_MODE !== 'sound') registerVoiceTools();
+    watchBrowserBattery();
+    wired = true;
+  }
+  depth = 0;
+  history.replaceState(ROOT, '');
+  render(ROOT);
+  startVisit('load');
+  openLink();
+  sayHello();
+  startTick();
+}
+
 async function openMessage(text) {
   const buf = fromB64url(text.trim());
   const plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: buf.slice(0, 12) }, key, buf.slice(12));
@@ -123,14 +259,13 @@ const BROKERS = [
   { url: 'wss://public.cloud.shiftr.io', username: 'public', password: 'public' },
 ];
 const OUTBOX_MAX_AGE = 60000;
-// A broker that connects late (or again) is also handed what went out in the last few seconds, so a
-// hello or press sent while only a broker without the phone was up still arrives. The phone ignores a
-// message it has already had (same command, same time).
+// A late broker also receives recent queries. Playback and sound changes only go to
+// brokers that are already connected when those commands are issued.
 const RESEND_WINDOW = 10000;
 let links = [];
 let linkId = '';
 let linkDownSince = 0;    // when the page started waiting for a broker (0 while one is connected)
-let outbox = [];          // sealed presses waiting for a connection: { body, at, expects }
+let outbox = [];          // sealed queries waiting for a connection: { body, at, expects }
 let sentLately = [];      // sealed messages already out: { body, at }
 const recent = [];        // the last messages handled (the same one arrives from every broker)
 
@@ -143,7 +278,7 @@ function linkUp() {
 // (Bakar 2026-10-25: there a press waited 20-60 s for a broker; on a PC 2 s). Sent sealed once per
 // visit, on its first broker connect, with the previous visit's whole record (kept here when the page
 // is hidden, so a visit that never reached the phone still gets reported). The phone ignores it.
-const BUILD = 18;
+const BUILD = 20;
 let visit = null;
 let hiddenAt = 0;
 
@@ -191,6 +326,7 @@ function endVisit() {
 }
 
 function linkChanged() {
+  if (!linkUp() && liveAndroidAt) cancelPendingCommands();
   if (linkUp()) linkDownSince = 0;
   else {
     if (!linkDownSince) linkDownSince = Date.now();
@@ -242,9 +378,17 @@ function loadMqtt() {
 }
 
 function openLink() {
-  if (links.length) return;
+  if (!isAndroidVisit() || links.length) return;
   // Tests (and only tests) supply their own link.
-  if (window.__testLink) { links = [window.__testLink]; window.__testLink.onMessage = handle; flushOutbox(); return; }
+  if (window.__testLink) {
+    const generation = connectionGeneration;
+    links = [window.__testLink];
+    window.__testLink.onMessage = (text, retained) => {
+      if (generation === connectionGeneration) return handle(text, retained);
+    };
+    flushOutbox();
+    return;
+  }
   if (typeof mqtt === 'undefined') {
     if (!linkDownSince) linkDownSince = Date.now();
     loadMqtt();
@@ -288,6 +432,7 @@ function addBroker({ url, ...extra }) {
   const host = new URL(url).hostname.split('.').slice(-2, -1)[0]; // emqx, hivemq, shiftr
   client.host = host;
   client.on('connect', () => {
+    if (!isAndroidVisit() || !links.includes(client)) return;
     client.fails = 0;
     clearTimeout(client.retryTimer);
     client.retryTimer = 0;
@@ -311,15 +456,18 @@ function addBroker({ url, ...extra }) {
   });
   // MQTT marks a broker's stored copy (sent on subscribing) as retained, and a message published while
   // the page listens as not retained.
-  client.on('message', (t, payload, packet) => handle(new TextDecoder().decode(payload), !!(packet && packet.retain)));
-  client.on('offline', linkChanged);
-  client.on('close', () => { linkChanged(); scheduleRetry(client); });
+  client.on('message', (t, payload, packet) => {
+    if (links.includes(client)) handle(new TextDecoder().decode(payload), !!(packet && packet.retain));
+  });
+  client.on('offline', () => { if (links.includes(client)) linkChanged(); });
+  client.on('close', () => { if (links.includes(client)) { linkChanged(); scheduleRetry(client); } });
   client.on('error', (e) => noteLink(host, 'err', e));
   links.push(client);
   return client;
 }
 
 function closeLink() {
+  cancelPendingCommands();
   const old = links;
   links = [];
   linkDownSince = 0;
@@ -330,6 +478,7 @@ function closeLink() {
 }
 
 function flushOutbox() {
+  if (!isAndroidVisit()) return;
   const live = links.filter((l) => l.connected);
   if (!live.length) return;
   const now = Date.now();
@@ -342,14 +491,18 @@ function flushOutbox() {
   }
 }
 
-async function send(c, extra = {}) {
-  const body = await seal({ c, ts: Date.now(), ...extra });
+async function send(c, extra = {}, stillValid = null) {
+  // Only idempotent queries may go into a queue or replay on a later broker connection.
+  const readOnly = READ_ONLY.has(c);
+  if (!isAndroidVisit() || (stillValid && !stillValid()) || (!readOnly && !requireAndroid())) return false;
+  const generation = connectionGeneration;
+  const body = await seal({ ...extra, c, ts: Date.now() });
+  if (generation !== connectionGeneration || !isAndroidVisit() || (stillValid && !stillValid()) || (!readOnly && !canControlAndroid())) return false;
   const expects = EXPECTS_REPLY.has(c);
   const live = links.filter((l) => l.connected);
   if (!live.length) {
-    // Not connected this instant (just opened, or the glasses' network is waking): it goes out
-    // the moment a broker connects. The phone ignores a press it has already done. A hidden page
-    // never reopens the link; the press waits for the app to come back.
+    // A query can wait for the current visit to connect. A control never waits for another route.
+    if (!readOnly) return false;
     outbox.push({ body, at: Date.now(), expects });
     if (document.visibilityState === 'visible') openLink();
     return true;
@@ -357,7 +510,7 @@ async function send(c, extra = {}) {
   // The oldest unanswered request counts: asking again must not reset the clock on a silent phone.
   if (expects && !pendingSince) pendingSince = Date.now();
   for (const l of live) l.publish(`bkr/${topic}/c`, body, { qos: 1 });
-  sentLately.push({ body, at: Date.now() });
+  if (readOnly) sentLately.push({ body, at: Date.now() });
   if (sentLately.length > 40) sentLately.shift();
   return true;
 }
@@ -367,6 +520,8 @@ async function send(c, extra = {}) {
 async function handle(text, retained = false) {
   // The same message arrives from every broker, stored on one and live on another; it is drawn once,
   // and its live copy still counts as the phone answering.
+  if (!isAndroidVisit() || !linkUp()) return;
+  const generation = connectionGeneration;
   const again = recent.includes(text);
   if (!again) {
     recent.push(text);
@@ -374,6 +529,9 @@ async function handle(text, retained = false) {
   }
   let m;
   try { m = await openMessage(text); } catch (e) { return; }
+  if (generation !== connectionGeneration || !isAndroidVisit() || !linkUp()) return;
+  const freshReport = !retained && !again && Number.isFinite(m.at) && Math.abs(Date.now() - m.at) < LIVE_WINDOW_MS;
+  if (freshReport && (m.t === 'state' || m.t === 'snd')) liveAndroidAt = Date.now();
   lastHeard = Date.now();
   if (!retained) {
     heardLive = Date.now();
@@ -402,7 +560,7 @@ async function handle(text, retained = false) {
     renderNow();
     confirmAction();
     if (view.screen === 'queue') renderQueue(false);
-    for (const w of waiters) w();
+    if (freshReport) for (const w of waiters) w();
   } else if (m.t === 'lib') {
     libCache.set(`${m.id}|${m.page}`, { at: Date.now(), m });
     if (view.screen === 'lib' && view.id === m.id && view.page === m.page) renderLibrary(m, true);
@@ -429,43 +587,6 @@ function sayHello() {
 // Battery: while the app is not on screen, drop the live connection and stop every timer. Anything a
 // swipe left waiting (a seek, a volume, a sound) goes out first; nothing is repeated while hidden.
 // Coming back, the retained state arrives the moment a broker connects.
-function onVisibility() {
-  if (document.visibilityState === 'visible') {
-    // A new visit: the phone has to answer again before anything shows as live, so it is always asked,
-    // however soon after the last hello (Director recheck 2026-10-25: shown again within 15 s, it waited
-    // three minutes on "Checking your phone…").
-    heardLive = 0;
-    pendingSince = 0;
-    lastHello = 0;
-    startVisit('wake');
-    openLink();
-    sayHello();
-    startTick();
-    renderNow();
-  } else {
-    hiddenAt = Date.now();
-    endVisit();
-    clearTimeout(confirmTimer);
-    confirmTimer = 0;
-    if (seekPreview != null) {
-      clearTimeout(seekTimer);
-      const target = seekPreview;
-      seekPreview = null;
-      seekStreak = 0;
-      send('seek', { ms: Math.round(target) });
-    }
-    dropSeekHold(); // nothing is repeated while hidden: a resend queued now would go out on return and jump the music back
-    if (volTimer) {
-      clearTimeout(volTimer);
-      volTimer = 0;
-      send('volSet', { v: volPreview });
-    }
-    if (sndTimer) flushSound();
-    stopTick();
-    setTimeout(() => { if (document.visibilityState !== 'visible') closeLink(); }, 400);
-  }
-}
-
 // ---- small helpers -----------------------------------------------------------------------
 
 // SVG elements have no `hidden` property (it exists only on HTML elements), so toggle the attribute.
@@ -707,6 +828,7 @@ function stateLine() {
   // Only the phone's own answer this visit is live; until then the screen shows its last stored state.
   if (!heardLive) return 'Checking your phone…';
   if (phase || !hasTrack()) return 'Phone connected';
+  if (playIntent) return playIntent.want ? 'Play requested…' : 'Pause requested…';
   if (state.buf) return 'Buffering…';
   return state.play ? 'Playing' : 'Paused';
 }
@@ -720,7 +842,7 @@ function renderStateLine() {
   // The line is in the warning style only when it is itself a warning; "Tidal didn't start" is said in
   // the headline, beside a plain "Phone connected".
   $('stateText').parentElement.classList.toggle('warn', lineWarns());
-  $('dot').classList.toggle('live', !!(hasTrack() && state.play && !state.buf && heardLive && !warn));
+  $('dot').classList.toggle('live', !!(hasTrack() && state.play && !state.buf && !playIntent && heardLive && !warn));
   // Dimmed only when an old song is on screen; a headline saying what went wrong stays bright.
   document.body.classList.toggle('stale', !!state && warn && hasTrack());
 }
@@ -972,6 +1094,7 @@ function clearIntent() {
 }
 
 function press(c, extra) {
+  if (!requireAndroid()) return;
   lastAction = c;
   if (c === 'next' || c === 'prev' || c === 'skip' || c === 'libplay') cancelSeek(); // another song: a held seek or its resend would land on it
   if (c === 'play' && !hasTrack()) {
@@ -998,7 +1121,7 @@ function press(c, extra) {
     clearTimeout(confirmTimer);
     confirmTimer = setTimeout(() => {
       confirmTimer = 0;
-      if (state && !!state.play === want) return;
+      if (!canControlAndroid() || (state && !!state.play === want)) return;
       if (want && startingSince) return; // the phone is still starting Tidal
       say(want ? 'Asking Tidal to play again…' : 'Asking Tidal to pause again…');
       send(c, extra);
@@ -1009,6 +1132,7 @@ function press(c, extra) {
 // ---- seeking: swipe on the song bar --------------------------------------------------------
 
 function nudgeSeek(direction) {
+  if (!requireAndroid()) return;
   if (!hasTrack() || !state.dur || !state.seek) return;
   // Keep swiping and the steps grow: 10 s, 10 s, 20 s, 30 s, 60 s…
   const now = Date.now();
@@ -1032,6 +1156,7 @@ function nudgeSeek(direction) {
 // tests/press_test.py checks that a press with hand movement is still a press.)
 
 function nudgeVolume(delta) {
+  if (!requireAndroid()) return;
   const { cur, max } = volParts();
   if (cur == null) { press(delta > 0 ? 'volUp' : 'volDown'); return; }
   volPreview = Math.max(0, Math.min((volPreview ?? cur) + delta, max ?? 15));
@@ -1060,6 +1185,7 @@ function go(next) {
 }
 
 function render(next) {
+  if (!isAndroidVisit()) return;
   view = next || ROOT;
   const sc = view.screen;
   $('now').hidden = sc !== 'now';
@@ -1386,6 +1512,7 @@ function sliderText(c, v) {
 }
 
 function soundChanged() {
+  if (!requireAndroid()) return;
   sndEditAt = Date.now();
   if (view.screen === 'bands') renderBands(); else renderSound();
   clearTimeout(sndTimer);
@@ -1809,12 +1936,26 @@ function snapshot() {
 }
 
 function waitForPhone(check, signal, ms = 4000) {
-  return new Promise((resolve) => {
-    const done = () => { waiters.delete(on); clearTimeout(timer); resolve(snapshot()); };
-    const on = () => { if (check()) done(); };
-    const timer = setTimeout(done, ms);
+  const generation = connectionGeneration;
+  return new Promise(resolve => {
+    const done = confirmed => {
+      waiters.delete(on);
+      clearTimeout(timer);
+      if (signal) signal.removeEventListener('abort', cancel);
+      resolve(confirmed ? { ...snapshot(), confirmed: true }
+        : { confirmed: false, message: 'The paired Android did not confirm this request.' });
+    };
+    const cancel = () => done(false);
+    const on = () => {
+      if (generation !== connectionGeneration || !isAndroidVisit()) cancel();
+      else if (check()) done(true);
+    };
+    const timer = setTimeout(cancel, ms);
     waiters.add(on);
-    if (signal) signal.addEventListener('abort', done, { once: true });
+    if (signal) {
+      if (signal.aborted) cancel();
+      else signal.addEventListener('abort', cancel, { once: true });
+    }
   });
 }
 
@@ -1822,6 +1963,11 @@ function registerVoiceTools() {
   const ctx = document.modelContext;
   if (!ctx || typeof ctx.registerTool !== 'function') return;
   const reg = (tool) => {
+    const execute = tool.execute;
+    tool.execute = async (...args) => {
+      if (!canControlAndroid()) return JSON.stringify({ error: true, message: 'Android control is inactive. Use the selected phone.' });
+      return execute(...args);
+    };
     try {
       const r = ctx.registerTool(tool);
       if (r && typeof r.then === 'function') r.then(undefined, (e) => console.warn(tool.name, e));
@@ -1831,7 +1977,7 @@ function registerVoiceTools() {
     const before = snapshot();
     press(c);
     const after = await waitForPhone(() => check(before), opts && opts.signal);
-    return JSON.stringify({ ...after, next_action: 'Confirm in one short sentence, then stop.' });
+    return JSON.stringify({ ...after, next_action: after.confirmed ? 'Confirm briefly.' : 'Tell the wearer this change was unconfirmed.' });
   };
 
   reg({
@@ -1860,7 +2006,7 @@ function registerVoiceTools() {
       if (!!state.liked === want) return JSON.stringify({ ...snapshot(), next_action: 'Say it is already that way, then stop.' });
       press('like');
       const after = await waitForPhone(() => !!state.liked === want, opts && opts.signal);
-      return JSON.stringify({ ...after, next_action: 'Confirm in one short sentence, then stop.' });
+      return JSON.stringify({ ...after, next_action: after.confirmed ? 'Confirm briefly.' : 'Tell the wearer this change was unconfirmed.' });
     },
   });
   reg({
@@ -1886,7 +2032,7 @@ function registerVoiceTools() {
       target = Math.max(0, Math.min(top, Number.isFinite(target) ? target : (cur ?? 7)));
       send('volSet', { v: target });
       const after = await waitForPhone(() => volParts().cur === target, opts && opts.signal, 3000);
-      return JSON.stringify({ ...after, next_action: 'Confirm in one short sentence, then stop.' });
+      return JSON.stringify({ ...after, next_action: after.confirmed ? 'Confirm briefly.' : 'Tell the wearer this change was unconfirmed.' });
     },
   });
 }
@@ -1962,7 +2108,7 @@ function wire() {
   // The glasses' connection comes back after charging or a restart: reconnect at once.
   window.addEventListener('online', () => {
     if (visit) visit.onN = (visit.onN || 0) + 1; // each one restarts every link, so the report counts them
-    if (document.visibilityState !== 'visible') return;
+    if (!isAndroidVisit()) return;
     closeLink();
     lastHello = 0;
     openLink();
@@ -1971,40 +2117,49 @@ function wire() {
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && view.screen !== ROOT.screen) { e.preventDefault(); history.back(); }
   });
-  document.addEventListener('visibilitychange', onVisibility);
+
 }
 
-async function main() {
-  const pair = readPairing();
-  if (!pair || !window.crypto || !crypto.subtle) {
-    if (APP_MODE === 'sound') {
-      document.title = 'Sound Lab';
-      $('setup').querySelector('use').setAttribute('href', 'sound/icon-mono.svg#glyph');
-      $('setupTitle').textContent = 'Sound Lab';
-      $('setupOption').textContent = 'The equalizer needs Tidal Glass on Android.';
-      $('setupHint').textContent = 'For iPhone audio, choose your glasses as the Bluetooth output.';
-    }
-    $('now').hidden = true;
-    $('setup').hidden = false;
-    return;
-  }
-  topic = pair.t;
-  key = await crypto.subtle.importKey('raw', fromB64url(pair.k), 'AES-GCM', false, ['encrypt', 'decrypt']);
-  history.replaceState(ROOT, '');
-  wire();
+function main() {
+  pairing = readPairing();
   if (APP_MODE === 'sound') {
     document.title = 'Sound Lab';
-    render(ROOT);
-  } else {
-    renderNow();
-    focusDefault();
-    registerVoiceTools();
+    $('setup').querySelector('use').setAttribute('href', 'sound/icon-mono.svg#glyph');
   }
-  watchBrowserBattery();
-  // A late web font can change label widths after the first fit.
-  if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => { if (view.screen === 'sound') fitTools(); });
+  const showSavedChoice = () => deviceScreen(savedOutput() === 'iphone' ? 'iphone' : 'choose');
+  $('useIphone').addEventListener('click', () => {
+    leaveAndroid();
+    try { localStorage.setItem(OUTPUT_KEY, 'iphone'); } catch { /* still usable for this visit */ }
+    deviceScreen('iphone');
+  });
+  $('useAndroid').addEventListener('click', () => {
+    deviceScreen('confirm', pairing ? '' : 'Open the pairing link from Tidal Glass on Android.');
+  });
+  $('confirmAndroid').addEventListener('click', controlAndroid);
+  $('chooseAgain').addEventListener('click', choosePhone);
+  document.querySelectorAll('.device-switch').forEach(button => button.addEventListener('click', choosePhone));
+  // Revoke before the app is suspended. A prior foreground decision cannot identify the
+  // companion phone (or its speaker) when the glasses return from another phone.
+  function resetVisit() {
+    leaveAndroid();
+    showSavedChoice();
+  }
+  document.addEventListener('visibilitychange', () => {
+    if (androidVisit || document.visibilityState === 'visible') resetVisit();
+  });
+  window.addEventListener('pagehide', resetVisit);
+  window.addEventListener('pageshow', event => { if (event.persisted) resetVisit(); });
+  window.addEventListener('hashchange', () => { resetVisit(); pairing = readPairing(); });
+  window.addEventListener('storage', event => {
+    if (event.key === OUTPUT_KEY || event.key === 'tg.pair' || event.key === null) {
+      resetVisit();
+      if (event.key !== OUTPUT_KEY) {
+        try { pairing = JSON.parse(localStorage.getItem('tg.pair') || 'null'); } catch { pairing = null; }
+      }
+    }
+  });
   registerServiceWorker();
-  if (document.visibilityState === 'visible') { startVisit('load'); openLink(); sayHello(); startTick(); }
+  showSavedChoice();
 }
 
 main();

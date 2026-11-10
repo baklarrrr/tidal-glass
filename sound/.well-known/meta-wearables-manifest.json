@@ -1,7 +1,7 @@
 {
   "version": 1,
   "name": "Sound Lab",
-  "description": "Equaliser, tone, loudness and balance for Tidal on your glasses' speakers, linked to the Tidal Glass app on your phone.",
+  "description": "Adjust TIDAL sound on a paired Android phone or view the iPhone Bluetooth playback steps.",
   "appearance": {
     "theme_color": "#2FD8EC",
     "icon_background": {

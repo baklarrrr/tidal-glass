@@ -56,15 +56,17 @@ def cover(rgb):
 
 with sync_playwright() as p:
     browser = p.chromium.launch(channel="chrome", args=["--enable-spatial-navigation"])
-    page = browser.new_context(viewport={"width": 600, "height": 600}).new_page()
+    page = browser.new_context(viewport={"width": 600, "height": 600}, service_workers="block").new_page()
     errors = []
     page.on("pageerror", lambda e: errors.append(str(e)))
     # The page uses this instead of the brokers; it records what would have been published.
     page.add_init_script(LINK)
     page.route("**/broker.*/**", lambda route: route.abort())
     page.goto(URL)
+    page.locator("#useAndroid").click()
+    page.locator("#confirmAndroid").click()
     page.wait_for_function("typeof key !== 'undefined' && key !== null")
-    page.evaluate("s => { state = {...s, at: Date.now()}; lastHeard = Date.now(); renderNow(); }", STATE)
+    page.evaluate("async s => { await handle(await seal({...s, at: Date.now()})); }", STATE)
 
     def commands():
         """Decrypt everything sent so far with the page's own code; returns the command names."""
@@ -140,7 +142,7 @@ with sync_playwright() as p:
     page.evaluate("window.__testLink.connected = true; flushOutbox()")
     page.wait_for_timeout(300)
     c = commands()
-    check("a press while offline is sent on reconnect", held == [] and c == ["next"], json.dumps([held, c]))
+    check("an offline press is discarded on reconnect", held == [] and c == [], json.dumps([held, c]))
 
     # 8b. An older state (a broker that missed updates) never replaces a newer one; a newer one does.
     titles = page.evaluate("""async s => {
@@ -214,6 +216,7 @@ with sync_playwright() as p:
     # 27. A broker's stored copy is not the phone answering (Director recheck 2026-10-25): on a fresh
     # visit it shows, but not as live; without a live answer the warning comes, in the warning style, the
     # dot goes out and the rest is dimmed; the same message arriving live (from another broker) counts.
+    reset()
     page.evaluate("s => { heardLive = 0; pendingSince = Date.now(); state = null; }", STATE)
     page.evaluate("async s => { window.__stored = await seal({...s, play: true, at: Date.now() + 30000}); await handle(window.__stored, true); }", STATE)
     stored = page.evaluate("[stateLine(), $('dot').classList.contains('live'), $('title').textContent]")
@@ -234,18 +237,19 @@ with sync_playwright() as p:
     check("calm stays off while a warning shows", calm_on_warning is False, json.dumps(calm_on_warning))
     page.evaluate("wakeUp()")
 
-    # 31. Shown again soon after the last hello, the page asks the phone at once instead of waiting
-    # three minutes on "Checking your phone…" (Director recheck 2, 2026-10-25).
+    # 31. A new foreground visit asks for the phone choice before contacting Android again.
     reset()
     page.evaluate("lastHello = Date.now(); Object.defineProperty(document, 'visibilityState', {configurable: true, get: () => 'hidden'}); document.dispatchEvent(new Event('visibilitychange'));")
     page.wait_for_timeout(500)
     page.evaluate("window.__sent.length = 0; Object.defineProperty(document, 'visibilityState', {configurable: true, get: () => 'visible'}); document.dispatchEvent(new Event('visibilitychange'));")
     page.wait_for_timeout(500)
     quick = commands()
-    check("shown again within 15 s: a hello goes out at once", "hello" in quick, json.dumps(quick))
+    check("reopening always requires choosing Android again", quick == [] and page.locator("#useAndroid").is_visible(), json.dumps(quick))
+    page.locator("#useAndroid").click()
+    page.locator("#confirmAndroid").click()
     page.evaluate("async s => { await handle(await seal({...s, at: Date.now() + 40000})); }", STATE)
 
-    # 14. Hidden: a press waits; the link is not reopened behind the wearer's back (R4).
+    # 14. A hidden press is discarded. The wearer must confirm the Android phone on return.
     reset()
     page.evaluate("Object.defineProperty(document, 'visibilityState', {configurable: true, get: () => 'hidden'}); document.dispatchEvent(new Event('visibilitychange'));")
     page.wait_for_timeout(600)
@@ -255,7 +259,10 @@ with sync_playwright() as p:
     page.evaluate("Object.defineProperty(document, 'visibilityState', {configurable: true, get: () => 'visible'}); document.dispatchEvent(new Event('visibilitychange'));")
     page.wait_for_timeout(300)
     shown_again = commands()
-    check("hidden: no reopen, the press waits and goes out when shown", hidden == [0, 1, 0] and "next" in shown_again, json.dumps([hidden, shown_again]))
+    check("hidden commands are dropped and reopening cannot replay them", hidden == [0, 0, 0] and "next" not in shown_again, json.dumps([hidden, shown_again]))
+    page.locator("#useAndroid").click()
+    page.locator("#confirmAndroid").click()
+    page.evaluate("async s => { await handle(await seal({...s, at: Date.now()})); }", STATE)
 
     # 15. Battery: the glasses' own reading first, a bolt when charging, an old phone report hidden (R5).
     page.evaluate("browserBattery = {level: 0.62, charging: true}; drawBattery();")
@@ -403,12 +410,14 @@ with sync_playwright() as p:
     page.evaluate("s => { state = {...s, at: Date.now() + 20000}; renderNow(); }", STATE)
 
     # 16. Sound Lab (Director review R8-R10): actions wait for the phone, notes stay in the header.
-    sp = browser.new_context(viewport={"width": 600, "height": 600}).new_page()
+    sp = browser.new_context(viewport={"width": 600, "height": 600}, service_workers="block").new_page()
     sp.on("pageerror", lambda e: errors.append(str(e)))
     sp.add_init_script(LINK)
     sp.goto(URL.replace("index.html?test=1", "index.html?app=sound&test=1"))
+    sp.locator("#useAndroid").click()
+    sp.locator("#confirmAndroid").click()
     sp.wait_for_function("typeof key !== 'undefined' && key !== null")
-    SND = {"t": "snd", "at": 1, "s": {"on": True, "preset": "Open-ear", "bass": 2, "mids": 0, "treble": 1, "clarity": 3, "loud": 2, "bal": 0, "bands": [0] * 10},
+    SND = {"t": "snd", "at": sp.evaluate("Date.now() - 1000"), "s": {"on": True, "preset": "Open-ear", "bass": 2, "mids": 0, "treble": 1, "clarity": 3, "loud": 2, "bal": 0, "bands": [0] * 10},
            "presets": {"Flat": [0] * 10, "Open-ear": [3, 3, 2, 1, 0, 0, 1, 2, 2, 1]}, "status": "Shaping Tidal", "active": True, "w": {},
            "slots": [{"n": 1, "label": ""}, {"n": 2, "label": ""}, {"n": 3, "label": ""}]}
     sp.evaluate("async m => { await handle(await seal(m)); }", SND)
@@ -417,7 +426,7 @@ with sync_playwright() as p:
     sp.keyboard.press("Enter")
     sp.wait_for_timeout(100)
     turning = sp.evaluate("$('sndStateText').textContent")
-    sp.evaluate("async m => { await handle(await seal({...m, at: 2, s: {...m.s, on: false}, status: 'Off'})); }", SND)
+    sp.evaluate("async m => { await handle(await seal({...m, at: m.at + 2, s: {...m.s, on: false}, status: 'Off'})); }", SND)
     sp.wait_for_timeout(100)
     confirmed = sp.evaluate("$('sndStateText').textContent")
     check("Sound Lab Off: 'Turning off…' until the phone confirms", turning == "Turning off…" and confirmed == "Off · Tidal plays as normal", json.dumps([turning, confirmed]))
@@ -439,7 +448,7 @@ with sync_playwright() as p:
     NAME21 = "Sound Lab: Down from On/Off is Preset, Up from Preset is On/Off"
 
     def t21():
-        sp.evaluate("async m => { await handle(await seal({...m, at: 3})); }", SND)
+        sp.evaluate("async m => { await handle(await seal({...m, at: m.at + 3})); }", SND)
         sp.focus("#sndPower")
         sp.keyboard.press("ArrowDown")
         sp.wait_for_timeout(200)
@@ -538,9 +547,9 @@ with sync_playwright() as p:
 
     def t33():
         sp.evaluate("heardLive = 0; pendingSince = 0; sndPending = null; sndNote = null;")
-        sp.evaluate("async m => { await handle(await seal({...m, at: 20}), true); renderSoundStatus(); }", SND)
+        sp.evaluate("async m => { await handle(await seal({...m, at: m.at + 20}), true); renderSoundStatus(); }", SND)
         st = sp.evaluate("[$('sndStateText').textContent, $('sndDot').classList.contains('live')]")
-        sp.evaluate("async m => { await handle(await seal({...m, at: 21})); renderSoundStatus(); }", SND)
+        sp.evaluate("async m => { await handle(await seal({...m, at: m.at + 21})); renderSoundStatus(); }", SND)
         live = sp.evaluate("[$('sndStateText').textContent, $('sndDot').classList.contains('live')]")
         check(NAME33, st == ["Checking your phone…", False] and live == ["Shaping Tidal", True], json.dumps([st, live]))
     guard(NAME33, t33)
@@ -550,7 +559,7 @@ with sync_playwright() as p:
     NAME29 = "Sound Lab: an unconfirmed Off returns to the phone's last report, never claimed later"
 
     def t29():
-        sp.evaluate("async m => { await handle(await seal({...m, at: 10})); }", SND)
+        sp.evaluate("async m => { await handle(await seal({...m, at: m.at + 10})); }", SND)
         sp.wait_for_timeout(100)
         sp.focus("#sndPower")
         sp.keyboard.press("Enter")
@@ -565,10 +574,12 @@ with sync_playwright() as p:
     # 24. Sound Lab with nothing from the phone yet: no made-up sliders, no On/Off that does nothing; when
     # the sound arrives the controls show and Preset has focus, so the next swipe works.
     NAME24 = "Sound Lab without data shows an honest empty state, then Preset when the sound arrives"
-    sq = browser.new_context(viewport={"width": 600, "height": 600}).new_page()
+    sq = browser.new_context(viewport={"width": 600, "height": 600}, service_workers="block").new_page()
     sq.on("pageerror", lambda e: errors.append(str(e)))
     sq.add_init_script(LINK)
     sq.goto(URL.replace("index.html?test=1", "index.html?app=sound&test=1"))
+    sq.locator("#useAndroid").click()
+    sq.locator("#confirmAndroid").click()
     sq.wait_for_function("typeof key !== 'undefined' && key !== null")
     sq.wait_for_timeout(300)
 
@@ -587,7 +598,7 @@ with sync_playwright() as p:
     # back to what the phone said, and the line and dot never say Playing before the phone does.
     BUTTON = ("() => [!document.getElementById('pauseIcon').hasAttribute('hidden'), "
               "document.getElementById('stateText').textContent, document.getElementById('dot').classList.contains('live')]")
-    PAUSED = "s => { state = {...s, play: false, at: Date.now()}; heardLive = Date.now(); pendingSince = 0; renderNow(); }"
+    PAUSED = "async s => { await handle(await seal({...s, play: false, at: Date.now()})); }"
 
     NAME42 = "Play shows on the button at once; the line and dot wait for the phone"
     def t42():
@@ -597,7 +608,7 @@ with sync_playwright() as p:
         page.keyboard.press("Enter")
         page.wait_for_timeout(60)
         b = page.evaluate(BUTTON)
-        check(NAME42, b[0] is True and b[1] != "Playing" and b[2] is False, json.dumps(b))
+        check(NAME42, b == [True, "Play requested…", False], json.dumps(b))
     guard(NAME42, t42)
 
     NAME43 = "two taps before the phone answers send play, then pause"
@@ -610,7 +621,7 @@ with sync_playwright() as p:
         page.keyboard.press("Enter")
         page.wait_for_timeout(300)
         c, b = commands(), page.evaluate(BUTTON)
-        check(NAME43, c[:2] == ["play", "pause"] and b[0] is False, json.dumps([c, b]))
+        check(NAME43, c[:2] == ["play", "pause"] and b == [False, "Pause requested…", False], json.dumps([c, b]))
     guard(NAME43, t43)
 
     NAME44 = "an unanswered Play goes back to Play after 5 s"
@@ -650,6 +661,10 @@ with sync_playwright() as p:
     SEEK_STATE = {**STATE, "play": True, "pos": 50000, "dur": 200000, "seek": True}
 
     def seek_fresh():
+        if page.locator("#useAndroid").is_visible():
+            page.locator("#useAndroid").click()
+            page.locator("#confirmAndroid").click()
+        page.evaluate("async s => { await handle(await seal({...s, at: Date.now()})); }", SEEK_STATE)
         reset()
         page.evaluate("""s => { clearTimeout(seekTimer); seekPreview = null;
           if (typeof seekHold !== 'undefined') { seekHold = null; clearTimeout(seekResendTimer); clockOffset = null; clockSamples = 0; }
