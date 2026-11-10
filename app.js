@@ -169,56 +169,43 @@ function leaveAndroid() {
   endVisit();
 }
 
-function deviceScreen(mode, message = '') {
+// The web app cannot inspect the paired phone or select an iOS Bluetooth output.
+function showIphone(message = '') {
   for (const el of document.querySelectorAll('main > section')) el.hidden = el.id !== 'setup';
   document.body.classList.remove('calm');
-  const iphone = mode === 'iphone';
-  const android = mode === 'confirm';
-  $('setupTitle').textContent = iphone ? 'iPhone playback' : android ? 'Control the paired Android?' : 'Choose your phone';
-  $('setupOption').textContent = iphone ? 'In TIDAL on iPhone, open Now Playing and tap the speaker icon.'
-    : android ? 'Play, volume and sound changes go to your paired Android phone.' : (APP_MODE === 'sound' ? 'Sound Lab' : 'Tidal Glass');
-  $('setupHint').textContent = message || (iphone ? 'Choose AirPlay & Bluetooth, then your Meta Ray-Ban Display.'
-    : android ? 'Music may play on its speaker. Check the Android audio output first.'
-    : 'iPhone uses Bluetooth. Android uses its own audio output.');
-  if (iphone && APP_MODE === 'sound') {
-    $('setupTitle').textContent = 'Sound Lab on iPhone';
-    $('setupOption').textContent = 'The equalizer uses the Android companion.';
-    $('setupHint').textContent = 'For iPhone audio, choose your glasses under AirPlay & Bluetooth in TIDAL.';
-  }
-  if (android && !pairing) {
-    $('setupTitle').textContent = 'Connect your Android';
-    $('setupOption').textContent = 'Sound and playback controls need the Tidal Glass companion.';
-  }
-  $('useIphone').hidden = $('useAndroid').hidden = iphone || android;
-  $('confirmAndroid').hidden = !android || !pairing;
-  $('chooseAgain').hidden = !iphone && !android;
-  const first = iphone || (android && !pairing) ? 'chooseAgain' : android ? 'confirmAndroid' : 'useIphone';
-  $(first).focus();
+  $('setupHint').textContent = message;
+  $('setupHint').hidden = !message;
+  $('useAndroid').hidden = !pairing || !window.crypto?.subtle;
+  $('setupTitle').focus({ preventScroll: true });
 }
 
-function choosePhone() {
+function returnToIphone() {
   leaveAndroid();
-  try { localStorage.setItem(OUTPUT_KEY, 'choose'); } catch { /* iPhone guidance also works offline */ }
-  deviceScreen('choose');
+  // An existing Android visit in another launcher loses its authority immediately.
+  // Avoid a write on ordinary iPhone launches and avoid echoing storage events.
+  if (savedOutput()?.startsWith('android:')) {
+    try { localStorage.setItem(OUTPUT_KEY, 'iphone'); } catch { /* the local guard already revoked control */ }
+  }
+  showIphone();
 }
 
-async function controlAndroid() {
-  if (!pairing || document.visibilityState !== 'visible' || $('setup').hidden || $('confirmAndroid').hidden) return;
+async function controlAndroid(event) {
+  if (!event?.isTrusted || !pairing || document.visibilityState !== 'visible' || $('setup').hidden || $('useAndroid').hidden) return;
   const generation = connectionGeneration;
   const requestedPair = pairing;
   const visitId = 'android:' + toB64url(crypto.getRandomValues(new Uint8Array(12)));
   try {
     const selectedKey = await crypto.subtle.importKey('raw', fromB64url(requestedPair.k), 'AES-GCM', false, ['encrypt','decrypt']);
     if (generation !== connectionGeneration || requestedPair !== pairing || document.visibilityState !== 'visible'
-        || $('setup').hidden || $('confirmAndroid').hidden) return;
+        || $('setup').hidden || $('useAndroid').hidden) return;
     localStorage.setItem(OUTPUT_KEY, visitId);
     key = selectedKey;
   } catch {
-    deviceScreen('confirm', 'Open a fresh Android pairing link and try again.');
+    showIphone('Android control is unavailable. Reopen the link from your Android companion.');
     return;
   }
   androidVisit = visitId;
-  if (!isAndroidVisit()) { choosePhone(); return; }
+  if (!isAndroidVisit()) { returnToIphone(); return; }
   topic = pairing.t;
   $('setup').hidden = true;
   if (!wired) {
@@ -285,7 +272,7 @@ function linkUp() {
 // (Bakar 2026-10-25: there a press waited 20-60 s for a broker; on a PC 2 s). Sent sealed once per
 // visit, on its first broker connect, with the previous visit's whole record (kept here when the page
 // is hidden, so a visit that never reached the phone still gets reported). The phone ignores it.
-const BUILD = 21;
+const BUILD = 22;
 let visit = null;
 let hiddenAt = 0;
 
@@ -2151,41 +2138,31 @@ function main() {
   if (APP_MODE === 'sound') {
     document.title = 'Sound Lab';
     $('setup').querySelector('use').setAttribute('href', 'sound/icon-mono.svg#glyph');
+    $('setupTitle').textContent = 'Sound Lab on iPhone';
+    $('setupOption').textContent = 'Volume on iPhone and glasses. The Sound Lab equalizer runs on Android.';
   }
-  const showSavedChoice = () => deviceScreen(savedOutput() === 'iphone' ? 'iphone' : 'choose');
-  $('useIphone').addEventListener('click', () => {
-    leaveAndroid();
-    try { localStorage.setItem(OUTPUT_KEY, 'iphone'); } catch { /* still usable for this visit */ }
-    deviceScreen('iphone');
-  });
-  $('useAndroid').addEventListener('click', () => {
-    deviceScreen('confirm', pairing ? '' : 'Open the pairing link from Tidal Glass on Android.');
-  });
-  $('confirmAndroid').addEventListener('click', controlAndroid);
-  $('chooseAgain').addEventListener('click', choosePhone);
-  document.querySelectorAll('.device-switch').forEach(button => button.addEventListener('click', choosePhone));
-  // Revoke before the app is suspended. A prior foreground decision cannot identify the
-  // companion phone (or its speaker) when the glasses return from another phone.
-  function resetVisit() {
-    leaveAndroid();
-    showSavedChoice();
+  $('useAndroid').addEventListener('click', controlAndroid);
+  document.querySelectorAll('.device-switch').forEach(button => button.addEventListener('click', returnToIphone));
+  function suspend() {
+    if (androidVisit) leaveAndroid();
+    showIphone();
   }
-  document.addEventListener('visibilitychange', () => {
-    if (androidVisit || document.visibilityState === 'visible') resetVisit();
-  });
-  window.addEventListener('pagehide', resetVisit);
-  window.addEventListener('pageshow', event => { if (event.persisted) resetVisit(); });
-  window.addEventListener('hashchange', () => { resetVisit(); pairing = readPairing(); });
+  function enter() {
+    if (document.visibilityState === 'visible') returnToIphone();
+    else suspend();
+  }
+  document.addEventListener('visibilitychange', enter);
+  window.addEventListener('pagehide', suspend);
+  window.addEventListener('pageshow', event => { if (event.persisted) enter(); });
+  window.addEventListener('hashchange', () => { pairing = readPairing(); enter(); });
   window.addEventListener('storage', event => {
-    if (event.key === OUTPUT_KEY || event.key === 'tg.pair' || event.key === null) {
-      resetVisit();
-      if (event.key !== OUTPUT_KEY) {
-        try { pairing = JSON.parse(localStorage.getItem('tg.pair') || 'null'); } catch { pairing = null; }
-      }
+    if (event.key === 'tg.pair' || event.key === null) {
+      try { pairing = JSON.parse(localStorage.getItem('tg.pair') || 'null'); } catch { pairing = null; }
     }
+    if (event.key === OUTPUT_KEY || event.key === 'tg.pair' || event.key === null) suspend();
   });
   registerServiceWorker();
-  showSavedChoice();
+  enter();
 }
 
 main();

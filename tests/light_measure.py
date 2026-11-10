@@ -97,7 +97,6 @@ with sync_playwright() as p:
     pg.add_init_script(LINK)
     pg.goto(f"{BASE}index.html#t=lighttest&k={KEY}")
     pg.locator("#useAndroid").click()
-    pg.locator("#confirmAndroid").click()
     pg.wait_for_function("typeof key !== 'undefined' && key !== null")
     for cover, art in COVERS.items():
         pg.evaluate("s => { state = {...s, at: Date.now()}; lastHeard = Date.now(); pendingSince = 0; renderNow(); }", dict(STATE, art=art))
@@ -118,7 +117,6 @@ with sync_playwright() as p:
     sp.add_init_script(LINK)
     sp.goto(f"{BASE}index.html?app=sound#t=lighttest&k={KEY}")
     sp.locator("#useAndroid").click()
-    sp.locator("#confirmAndroid").click()
     sp.wait_for_function("typeof key !== 'undefined' && key !== null")
     sp.evaluate("async m => { await handle(await seal({...m, at: Date.now()})); }", SND)
     sp.evaluate("async s => { await handle(await seal({...s, at: Date.now()})); }", STATE)

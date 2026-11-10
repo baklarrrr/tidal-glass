@@ -318,11 +318,11 @@ body.calm .srow:focus .fill, body.calm .srow:focus .knob, body.calm .bcol:focus 
 .state.warn .dot { background: #ffb08a; box-shadow: none; }
 body.stale #now .track, body.stale #now .seek, body.stale #now .row.main { opacity: 0.55; }
 
-.device-choices { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 8px; }
-.device-choices button, .device-switch {
+.android-option, .device-switch {
   border-radius: 999px; padding: 8px 16px; color: var(--ink); font-weight: 600;
 }
-.device-choices button { font-size: 19px; min-height: 48px; }
+.android-option { margin-top: 10px; font-size: 17px; min-height: 44px; color: var(--soft); }
+#setupTitle:focus { outline: none; }
 .device-switch { padding: 3px 9px; font-size: 14px; white-space: nowrap; }
 #setup { overflow-y: auto; }
 #setupOption, #setupHint { white-space: normal; }

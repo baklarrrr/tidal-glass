@@ -60,7 +60,6 @@ def sent(page):
 
 def select_android(page):
     page.locator("#useAndroid").click()
-    page.locator("#confirmAndroid").click()
     page.wait_for_function("isAndroidVisit() && key !== null")
 
 
@@ -82,12 +81,19 @@ def receipt(label):
     print("PASS", label, flush=True)
 
 
-def upgrade_open_page(browser, baseline):
+def upgrade_open_page(browser, baseline, chooser=False):
     # The old page has no listener for worker messages. A real worker update must
     # replace that document, otherwise its already-loaded controls remain active.
     current = Path(__file__).resolve().parents[1]
     served = [baseline]
     class UpgradeHandler(SilentHandler):
+        # Fixtures may be extracted in the same second, even though their contents
+        # differ. A timestamp-only 304 would serve the old bytes as the new build.
+        def do_GET(self):
+            if "If-Modified-Since" in self.headers:
+                del self.headers["If-Modified-Since"]
+            super().do_GET()
+
         def __init__(self, *args, **kwargs):
             super().__init__(*args, directory=served[0], **kwargs)
     with http.server.ThreadingHTTPServer(("127.0.0.1",0), UpgradeHandler) as srv, context(browser) as ctx:
@@ -98,14 +104,18 @@ def upgrade_open_page(browser, baseline):
             page = ctx.new_page()
             seed(page, base)
             page.goto(base)
-            page.wait_for_function("navigator.serviceWorker.controller !== null && typeof key !== 'undefined' && key !== null")
+            page.wait_for_function("navigator.serviceWorker.controller !== null")
+            if chooser:
+                assert page.locator("#useIphone").is_visible()
+            else:
+                page.wait_for_function("typeof key !== 'undefined' && key !== null")
             page.evaluate("caches.open('quran-glass-v13').then(c => c.put('sibling-state',new Response('preserve')))")
             served[0] = current
             page.evaluate("navigator.serviceWorker.getRegistration().then(r => {r.update().catch(()=>{});})")
-            page.locator("#useIphone").wait_for(state="visible", timeout=15000)
+            page.get_by_role("heading", name="TIDAL on iPhone", exact=True).wait_for(timeout=15000)
             assert page.evaluate("linksToAndroid === 0 && sent.length === 0")
             assert page.evaluate("caches.open('quran-glass-v13').then(c => c.match('sibling-state')).then(r => r.text())") == "preserve"
-            receipt("an already-open old control page reloads safely on upgrade and preserves sibling caches")
+            receipt(("the open v21 chooser" if chooser else "the open legacy control page") + " migrates to iPhone with no taps and preserves sibling caches")
         finally:
             srv.shutdown()
             worker.join()
@@ -114,6 +124,7 @@ def upgrade_open_page(browser, baseline):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--baseline", type=Path)
+    parser.add_argument("--chooser-baseline", type=Path)
     parser.add_argument("--shots", type=Path)
     args = parser.parse_args()
     if args.shots:
@@ -126,6 +137,21 @@ def main():
     with sync_playwright() as pw:
         browser = pw.chromium.launch(channel="chrome")
         try:
+            if args.chooser_baseline:
+                upgrade_open_page(browser, args.chooser_baseline, chooser=True)
+                with server(args.chooser_baseline) as base, context(browser) as ctx:
+                    old = ctx.new_page()
+                    seed(old, base)
+                    old.goto(base)
+                    assert old.locator("#useIphone").is_visible()
+                    old.locator("#useIphone").click()
+                    assert old.locator("#setupTitle").inner_text() == "iPhone playback"
+                    old.locator("#chooseAgain").click()
+                    old.locator("#useAndroid").click()
+                    assert not old.evaluate("isAndroidVisit()")
+                    old.locator("#confirmAndroid").click()
+                    old.wait_for_function("isAndroidVisit()")
+                    receipt("measured v21 first iPhone entry: one tap; Android from chooser: two taps")
             if args.baseline:
                 upgrade_open_page(browser, args.baseline)
                 with server(args.baseline) as base, context(browser) as ctx:
@@ -143,33 +169,34 @@ def main():
                 page = ctx.new_page()
                 errors = []
                 page.on("pageerror", lambda e: errors.append(str(e)))
-                seed(page, base)
                 page.goto(base)
-                assert page.locator("#useIphone").is_visible()
-                assert not page.locator("#now").is_visible()
-                assert try_commands(page) == [False] * len(MUTATIONS)
+                assert page.locator("#setupTitle").inner_text() == "TIDAL on iPhone"
+                assert not page.locator("#useAndroid").is_visible()
                 assert page.evaluate("linksToAndroid === 0 && sent.length === 0")
-                shot(page, "01-choose-phone")
-                receipt("stored Android does not select a phone or send any control before consent")
-                page.locator("#useIphone").click()
-                assert page.locator("#setupHint").inner_text().find("AirPlay & Bluetooth") >= 0
-                assert not page.evaluate("Object.keys(voiceTools).length")
-                assert not any(try_commands(page))
-                assert page.evaluate("linksToAndroid === 0")
-                shot(page, "02-iphone")
-                page.reload()
-                assert page.locator("#setupTitle").inner_text() == "iPhone playback"
+                shot(page, "01-iphone")
+                receipt("new installation opens on iPhone with zero taps and no Android actions")
+                seed(page, base)
+                for saved in (None, "choose", "android:previous-visit", "iphone"):
+                    page.evaluate("choice => choice ? localStorage.setItem('tg.output.v1',choice) : localStorage.removeItem('tg.output.v1')", saved)
+                    page.goto(base)
+                    assert page.locator("#setupTitle").inner_text() == "TIDAL on iPhone"
+                    assert page.locator("#useAndroid").is_visible()
+                    assert page.locator("#useIphone, #chooseAgain, #confirmAndroid").count() == 0
+                    assert page.evaluate("document.activeElement.id === 'setupTitle'")
+                    page.keyboard.press("Enter")
+                    page.evaluate("document.querySelector('#useAndroid').click()")
+                    assert not any(try_commands(page))
+                    assert page.evaluate("linksToAndroid === 0 && sent.length === 0")
+                receipt("all saved bindings open on iPhone in zero taps; pressing Enter or a synthetic click cannot select Android")
+                shot(page, "02-iphone-paired")
                 page.goto(base+"sound/")
                 assert page.locator("#setupTitle").inner_text() == "Sound Lab on iPhone"
-                assert "Android companion" in page.locator("#setupOption").inner_text()
+                assert not page.locator("#setupHint").is_visible()
+                assert page.evaluate("linksToAndroid === 0 && sent.length === 0")
                 assert not any(try_commands(page))
-                receipt("iPhone choice persists across Tidal and Sound Lab with zero Android transport")
-                page.locator("#chooseAgain").click()
-                page.locator("#useAndroid").click()
-                shot(page, "03-confirm-android")
-                assert not any(try_commands(page))
-                page.locator("#confirmAndroid").click()
-                page.wait_for_function("isAndroidVisit() && key !== null")
+                shot(page, "03-sound-iphone")
+                receipt("Sound Lab opens in iPhone mode without a picker, setup steps, or Android queries")
+                select_android(page)
                 state(page, True)
                 assert not any(try_commands(page))
                 page.evaluate("async s => handle(await seal({...s,at:Date.now()-600000}))", STATE)
@@ -201,7 +228,6 @@ def main():
                   window.seal = async (...args) => {await new Promise(resolve => setTimeout(resolve,100)); return realSeal(...args);};
                   window.pendingNext = send('next');
                   document.querySelector('.device-switch').click();
-                  document.querySelector('#useIphone').click();
                 }""")
                 assert not page.evaluate("pendingNext")
                 assert not page.evaluate("pendingVoice")["confirmed"]
@@ -214,7 +240,6 @@ def main():
                 assert page.evaluate("outbox.length === 0 && sentLately.length === 0")
                 assert json.loads(page.evaluate("voiceTools.tidal_play.execute({})"))["error"]
                 receipt("switch cancels pending encryption, play retry, seek, volume and sound; old voice tool blocked")
-                page.locator("#chooseAgain").click()
                 select_android(page)
                 state(page)
                 page.evaluate("""() => {
@@ -231,26 +256,23 @@ def main():
                 # Change the preference from Sound Lab, as occurs with two open launchers.
                 other = ctx.new_page()
                 other.goto(base+"sound/")
-                other.locator("#useIphone").click()
-                page.wait_for_function("!isAndroidVisit() && document.getElementById('setupTitle').textContent === 'iPhone playback'")
+                page.wait_for_function("!isAndroidVisit() && document.getElementById('setupTitle').textContent === 'TIDAL on iPhone'")
                 assert not any(try_commands(page))
                 receipt("switching phone in another launcher immediately revokes Android commands")
                 other.close()
-                page.locator("#chooseAgain").click()
                 select_android(page)
                 state(page)
                 page.evaluate("window.dispatchEvent(new Event('pagehide')); window.dispatchEvent(new PageTransitionEvent('pageshow',{persisted:true}))")
                 assert not any(try_commands(page))
-                assert page.locator("#useIphone").is_visible()
+                assert page.locator("#setup").is_visible()
                 receipt("returning from a suspended page requires a fresh foreground Android choice")
                 page.wait_for_function("navigator.serviceWorker.controller !== null")
                 ctx.set_offline(True)
                 page.reload(wait_until="domcontentloaded")
-                assert page.locator("#useIphone").is_visible()
-                page.locator("#useIphone").click()
+                assert page.locator("#setupTitle").inner_text() == "TIDAL on iPhone"
                 page.goto(base+"sound/")
                 assert page.locator("#setupTitle").inner_text() == "Sound Lab on iPhone"
-                assert "Android companion" in page.locator("#setupOption").inner_text()
+                assert "equalizer runs on Android" in page.locator("#setupOption").inner_text()
                 assert not any(try_commands(page))
                 receipt("offline cold reopen through both root and Sound Lab launcher serves safe iPhone mode")
                 assert not errors, errors

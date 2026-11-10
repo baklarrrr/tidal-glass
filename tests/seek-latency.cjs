@@ -28,12 +28,11 @@ const types = {'.html':'text/html','.js':'text/javascript','.css':'text/css','.s
   });
   await page.goto(base+'/index.html#t=seek-test&k=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA');
   if (await page.locator('#useAndroid').count()) {
-    await page.click('#useAndroid'); await page.click('#confirmAndroid');
+    await page.click('#useAndroid');
   }
   await page.waitForFunction(()=>key!==null);
   const reset=async()=>{
     if (await page.locator('#useAndroid').isVisible()) await page.click('#useAndroid');
-    if (await page.locator('#confirmAndroid').isVisible()) await page.click('#confirmAndroid');
     await page.evaluate(async s=>{
       cancelSeek(); lastSeekKey=0;
       await handle(await seal({...s,at:Date.now()}),false);

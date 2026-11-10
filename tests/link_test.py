@@ -65,7 +65,6 @@ with sync_playwright() as p:
     page.route("**/vendor/mqtt.min.js", lambda r: r.fulfill(status=200, content_type="application/javascript", body=FAKE_MQTT))
     page.goto(URL)
     page.locator("#useAndroid").click()
-    page.locator("#confirmAndroid").click()
     page.wait_for_function("typeof key !== 'undefined' && key !== null && window.__clients && window.__clients.length > 0")
     page.wait_for_timeout(400)
 
@@ -150,7 +149,6 @@ with sync_playwright() as p:
         hp.route("**/vendor/mqtt.min.js", lambda r: r.fulfill(status=200, content_type="application/javascript", body=FAKE_MQTT))
         hp.goto(URL)
         hp.locator("#useAndroid").click()
-        hp.locator("#confirmAndroid").click()
         hp.wait_for_function("window.__clients && window.__clients.length === 3")
         early = hp.evaluate("window.__clients.length")
         hp.wait_for_timeout(3400)

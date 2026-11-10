@@ -1,7 +1,7 @@
 {
   "version": 1,
   "name": "Sound Lab",
-  "description": "Adjust TIDAL sound on a paired Android phone or view the iPhone Bluetooth playback steps.",
+  "description": "iPhone playback volume and optional equalizer controls for TIDAL on a paired Android phone.",
   "appearance": {
     "theme_color": "#2FD8EC",
     "icon_background": {

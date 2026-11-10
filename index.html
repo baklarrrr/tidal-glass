@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="application-name" content="Tidal Glass">
-  <meta name="description" content="Choose iPhone Bluetooth playback or control TIDAL on a paired Android phone.">
+  <meta name="description" content="TIDAL playback from iPhone over Bluetooth, with optional controls for a paired Android phone.">
   <meta name="mrbd-web-app-capable" content="yes">
   <meta name="robots" content="noindex, nofollow">
   <meta name="theme-color" content="#000000">
@@ -17,7 +17,7 @@
     <section id="now" class="screen" aria-label="Now playing" hidden>
       <header class="topline">
         <span class="state"><span id="dot" class="dot" aria-hidden="true"></span><span id="stateText">Connecting to your phone…</span></span>
-        <button class="device-switch" type="button" aria-label="Change phone, currently paired Android">Android ▾</button>
+        <button class="device-switch" type="button" aria-label="Return to iPhone mode, currently controlling Android">Android · Switch</button>
         <span class="badges">
           <span id="atmos" class="badge" hidden>Dolby Atmos</span>
           <span id="explicit" class="badge square" title="Explicit" hidden>E</span>
@@ -110,7 +110,7 @@
     <section id="sound" class="screen sound" aria-labelledby="soundTitle" hidden>
       <header class="soundhead">
         <h2 id="soundTitle" tabindex="-1">Sound Lab</h2>
-        <button class="device-switch" type="button" aria-label="Change phone, currently paired Android">Android ▾</button>
+        <button class="device-switch" type="button" aria-label="Return to iPhone mode, currently controlling Android">Android · Switch</button>
         <span id="sndState" class="state"><span id="sndDot" class="dot" aria-hidden="true"></span><span id="sndStateText">Asking your phone…</span></span>
         <span class="gbat" data-gbat hidden aria-label="Glasses battery">
           <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2.5" y="7" width="17" height="10" rx="2.2" fill="none" stroke="currentColor" stroke-width="1.8"/><rect x="20.2" y="10" width="1.8" height="4" rx=".6"/><rect class="gbat-fill" x="4.3" y="8.8" width="13.4" height="6.4" rx="1"/><path class="gbat-bolt" d="M12.6 7.4 8.4 12.6h2.9l-1 4 4.3-5.4h-2.9z" fill="#000" stroke="#000" stroke-width="1.6" stroke-linejoin="round"/><path class="gbat-bolt" d="M12.6 7.4 8.4 12.6h2.9l-1 4 4.3-5.4h-2.9z"/></svg><span class="gbat-text"></span>
@@ -162,15 +162,10 @@
 
     <section id="setup" class="screen center" aria-labelledby="setupTitle">
       <svg class="hero" viewBox="0 0 64 64" aria-hidden="true"><use href="icon-mono.svg#glyph"/></svg>
-      <h1 id="setupTitle">Choose your phone</h1>
-      <p id="setupOption" class="artist"></p>
-      <p id="setupHint" class="album"></p>
-      <div class="device-choices">
-        <button id="useIphone" type="button">iPhone</button>
-        <button id="useAndroid" type="button">Paired Android</button>
-        <button id="confirmAndroid" type="button" hidden>Control Android this visit</button>
-        <button id="chooseAgain" type="button" hidden>Change phone</button>
-      </div>
+      <h1 id="setupTitle" tabindex="-1">TIDAL on iPhone</h1>
+      <p id="setupOption" class="artist">Playback and volume use the native controls on your iPhone and glasses.</p>
+      <p id="setupHint" class="album" role="status" hidden></p>
+      <button id="useAndroid" class="android-option" type="button" hidden>Control paired Android</button>
     </section>
   </main>
   <script src="app.js"></script>

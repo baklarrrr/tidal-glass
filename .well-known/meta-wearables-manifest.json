@@ -1,7 +1,7 @@
 {
   "version": 1,
   "name": "Tidal Glass",
-  "description": "Choose iPhone Bluetooth playback or control TIDAL on a paired Android phone.",
+  "description": "TIDAL playback from iPhone over Bluetooth, with optional controls for a paired Android phone.",
   "appearance": {
     "theme_color": "#2FD8EC",
     "icon_background": {

@@ -64,7 +64,6 @@ with sync_playwright() as p:
     page.route("**/broker.*/**", lambda route: route.abort())
     page.goto(URL)
     page.locator("#useAndroid").click()
-    page.locator("#confirmAndroid").click()
     page.wait_for_function("typeof key !== 'undefined' && key !== null")
     page.evaluate("async s => { await handle(await seal({...s, at: Date.now()})); }", STATE)
 
@@ -246,7 +245,6 @@ with sync_playwright() as p:
     quick = commands()
     check("reopening always requires choosing Android again", quick == [] and page.locator("#useAndroid").is_visible(), json.dumps(quick))
     page.locator("#useAndroid").click()
-    page.locator("#confirmAndroid").click()
     page.evaluate("async s => { await handle(await seal({...s, at: Date.now() + 40000})); }", STATE)
 
     # 14. A hidden press is discarded. The wearer must confirm the Android phone on return.
@@ -261,7 +259,6 @@ with sync_playwright() as p:
     shown_again = commands()
     check("hidden commands are dropped and reopening cannot replay them", hidden == [0, 0, 0] and "next" not in shown_again, json.dumps([hidden, shown_again]))
     page.locator("#useAndroid").click()
-    page.locator("#confirmAndroid").click()
     page.evaluate("async s => { await handle(await seal({...s, at: Date.now()})); }", STATE)
 
     # 15. Battery: the glasses' own reading first, a bolt when charging, an old phone report hidden (R5).
@@ -415,7 +412,6 @@ with sync_playwright() as p:
     sp.add_init_script(LINK)
     sp.goto(URL.replace("index.html?test=1", "index.html?app=sound&test=1"))
     sp.locator("#useAndroid").click()
-    sp.locator("#confirmAndroid").click()
     sp.wait_for_function("typeof key !== 'undefined' && key !== null")
     SND = {"t": "snd", "at": sp.evaluate("Date.now() - 1000"), "s": {"on": True, "preset": "Open-ear", "bass": 2, "mids": 0, "treble": 1, "clarity": 3, "loud": 2, "bal": 0, "bands": [0] * 10},
            "presets": {"Flat": [0] * 10, "Open-ear": [3, 3, 2, 1, 0, 0, 1, 2, 2, 1]}, "status": "Shaping Tidal", "active": True, "w": {},
@@ -579,7 +575,6 @@ with sync_playwright() as p:
     sq.add_init_script(LINK)
     sq.goto(URL.replace("index.html?test=1", "index.html?app=sound&test=1"))
     sq.locator("#useAndroid").click()
-    sq.locator("#confirmAndroid").click()
     sq.wait_for_function("typeof key !== 'undefined' && key !== null")
     sq.wait_for_timeout(300)
 
@@ -663,7 +658,6 @@ with sync_playwright() as p:
     def seek_fresh():
         if page.locator("#useAndroid").is_visible():
             page.locator("#useAndroid").click()
-            page.locator("#confirmAndroid").click()
         page.evaluate("async s => { await handle(await seal({...s, at: Date.now()})); }", SEEK_STATE)
         reset()
         page.evaluate("""s => { cancelSeek();
