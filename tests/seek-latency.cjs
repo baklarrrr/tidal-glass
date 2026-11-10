@@ -32,6 +32,8 @@ const types = {'.html':'text/html','.js':'text/javascript','.css':'text/css','.s
   }
   await page.waitForFunction(()=>key!==null);
   const reset=async()=>{
+    if (await page.locator('#useAndroid').isVisible()) await page.click('#useAndroid');
+    if (await page.locator('#confirmAndroid').isVisible()) await page.click('#confirmAndroid');
     await page.evaluate(async s=>{
       cancelSeek(); lastSeekKey=0;
       await handle(await seal({...s,at:Date.now()}),false);
@@ -73,7 +75,6 @@ const types = {'.html':'text/html','.js':'text/javascript','.css':'text/css','.s
     assert.deepEqual((await seeks()).map(m=>m.ms),[60000],action+' cancels pending seek and resend');
     if(action==='hide') {
       await page.evaluate(()=>{delete document.visibilityState;document.dispatchEvent(new Event('visibilitychange'));});
-      if(await page.locator('#confirmAndroid').isVisible()) await page.click('#confirmAndroid');
     }
   }
   console.log('Passed isolated, accelerated, reverse, song switch, Next, hidden and target-change checks.');
