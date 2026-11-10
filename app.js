@@ -1977,6 +1977,13 @@ function wire() {
 async function main() {
   const pair = readPairing();
   if (!pair || !window.crypto || !crypto.subtle) {
+    if (APP_MODE === 'sound') {
+      document.title = 'Sound Lab';
+      $('setup').querySelector('use').setAttribute('href', 'sound/icon-mono.svg#glyph');
+      $('setupTitle').textContent = 'Sound Lab';
+      $('setupOption').textContent = 'The equalizer needs Tidal Glass on Android.';
+      $('setupHint').textContent = 'For iPhone audio, choose your glasses as the Bluetooth output.';
+    }
     $('now').hidden = true;
     $('setup').hidden = false;
     return;
