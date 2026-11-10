@@ -46,12 +46,14 @@ let seekPreview = null;
 let seekTimer = 0;
 let seekStreak = 0;
 let lastSeekKey = 0;
+let seekTrack = null;
+let seekGeneration = 0;
 // After a seek is sent the bar stays where the swipe put it until the phone's own position agrees (2026-10-26: it snapped back to
 // the old position for a second or two, then jumped). {target, at, ti, until, resent}: target in ms at time `at` on THIS clock.
 const SEEK_HOLD_MS = 5000;     // give up waiting for the phone after this
 const SEEK_AGREE_MS = 2500;    // the phone agrees when its position is this close to where the swipe should have got to
 const SEEK_RESEND_MS = 1800;   // a seek is absolute, so it is safe to send once more if nothing confirmed it
-const SEEK_DEBOUNCE_MS = 500;  // one message for a burst of swipes: swipes closer than this merge, and the 10, 10, 20, 30, 60 s steps keep growing
+const SEEK_DEBOUNCE_MS = 500;  // Following swipes merge into one final absolute seek.
 let seekHold = null;
 let seekResendTimer = 0;
 // The phone stamps each state with its own clock ("at"). The glasses' clock can differ by seconds, so the position is carried
@@ -551,6 +553,7 @@ async function handle(text, retained = false) {
       clockSamples++;
       if (visit) visit.co = clockOffset;
     }
+    if (seekTrack && !sameSeekTrack(m)) cancelSeek();
     prevState = state;
     state = m;
     settleSeekHold();
@@ -584,9 +587,6 @@ function sayHello() {
   probe.then((extra) => send('hello', { ...extra, v: BUILD }));
 }
 
-// Battery: while the app is not on screen, drop the live connection and stop every timer. Anything a
-// swipe left waiting (a seek, a volume, a sound) goes out first; nothing is repeated while hidden.
-// Coming back, the retained state arrives the moment a broker connects.
 // ---- small helpers -----------------------------------------------------------------------
 
 // SVG elements have no `hidden` property (it exists only on HTML elements), so toggle the attribute.
@@ -692,9 +692,20 @@ function reportedPosition(s = state) {
   return Math.max(0, Math.min(p, s.dur));
 }
 
+// The media session supplies these fields on each state. A queue item ID can distinguish
+// two appearances of the same recording when Tidal provides one.
+function sameSeekTrack(s) {
+  return !!(seekTrack && s && s.acc && s.ses && s.seek && s.ti === seekTrack.ti &&
+    s.ar === seekTrack.ar && s.al === seekTrack.al && s.dur === seekTrack.dur && s.qa === seekTrack.qa);
+}
+
 // Another song is coming: forget the swipe still waiting to be sent as well as the held one.
 function cancelSeek() {
+  seekGeneration++;
+  seekTrack = null;
+  lastSeekKey = 0;
   clearTimeout(seekTimer);
+  seekTimer = 0;
   seekPreview = null;
   seekStreak = 0;
   dropSeekHold();
@@ -736,17 +747,21 @@ function settleSeekHold() {
 }
 
 function sendSeek(target) {
-  send('seek', { ms: Math.round(target) });
-  if (!state) return;
+  const generation = ++seekGeneration;
+  const valid = () => generation === seekGeneration && document.visibilityState === 'visible' &&
+    linkUp() && sameSeekTrack(state);
+  if (!valid()) { cancelSeek(); return; }
+  send('seek', { ms: Math.round(target) }, valid);
   seekHold = { target, at: Date.now(), ti: state.ti, dur: state.dur, play: !!state.play, until: Date.now() + SEEK_HOLD_MS };
   clearTimeout(seekResendTimer);
   seekResendTimer = setTimeout(() => {
     seekResendTimer = 0;
     // Nothing confirmed it: say it once more from where the swipe should have got to, but only while the page is on screen with a
     // link up, the song is the same, and nothing else has taken over the bar. A seek is absolute, so repeating it is safe.
-    if (!seekHold || !state || document.visibilityState !== 'visible' || !linkUp() || seekPreview != null) return;
+    const canResend = () => !!seekHold && seekPreview == null && valid();
+    if (!canResend()) return;
     if (heldPosition() >= state.dur - 3000) return; // at the very end Tidal may already have moved on: never seek the next song to the old end
-    send('seek', { ms: Math.round(heldPosition()) });
+    send('seek', { ms: Math.round(heldPosition()) }, canResend);
   }, SEEK_RESEND_MS);
 }
 
@@ -1132,22 +1147,28 @@ function press(c, extra) {
 // ---- seeking: swipe on the song bar --------------------------------------------------------
 
 function nudgeSeek(direction) {
-  if (!requireAndroid()) return;
-  if (!hasTrack() || !state.dur || !state.seek) return;
-  // Keep swiping and the steps grow: 10 s, 10 s, 20 s, 30 s, 60 s…
+  if (!requireAndroid() || !hasTrack() || !state.dur || !state.seek) return;
+  if (!sameSeekTrack(state)) { cancelSeek(); seekTrack = state; }
+  // First swipe goes straight to the phone. Further swipes accumulate an absolute destination.
   const now = Date.now();
-  seekStreak = now - lastSeekKey < 700 ? seekStreak + 1 : 0;
+  const gap = now - lastSeekKey;
+  seekStreak = lastSeekKey && gap < 700 ? seekStreak + 1 : 0;
+  const followup = lastSeekKey && gap < SEEK_DEBOUNCE_MS;
   lastSeekKey = now;
   const step = [10, 10, 20, 30, 60][Math.min(seekStreak, 4)] * 1000;
-  seekPreview = Math.max(0, Math.min((seekPreview ?? position()) + direction * step, state.dur));
-  tick();
+  seekPreview = Math.max(0, Math.min(position() + direction * step, state.dur));
   clearTimeout(seekTimer);
-  seekTimer = setTimeout(() => {
+  const flush = () => {
+    seekTimer = 0;
     const target = seekPreview;
     seekPreview = null;
     sendSeek(target);
     tick();
-  }, SEEK_DEBOUNCE_MS);
+  };
+  if (followup) {
+    seekTimer = setTimeout(flush, SEEK_DEBOUNCE_MS);
+    tick();
+  } else flush();
 }
 
 // ---- volume: buttons ---------------------------------------------------------------------

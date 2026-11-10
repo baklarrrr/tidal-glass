@@ -666,11 +666,11 @@ with sync_playwright() as p:
             page.locator("#confirmAndroid").click()
         page.evaluate("async s => { await handle(await seal({...s, at: Date.now()})); }", SEEK_STATE)
         reset()
-        page.evaluate("""s => { clearTimeout(seekTimer); seekPreview = null;
+        page.evaluate("""s => { cancelSeek();
           if (typeof seekHold !== 'undefined') { seekHold = null; clearTimeout(seekResendTimer); clockOffset = null; clockSamples = 0; }
           state = {...s, at: Date.now()}; lastHeard = Date.now(); renderNow(); }""", SEEK_STATE)
 
-    NAME46 = "46 a seek swipe shows at once, sends one seek about 0.4 s later, and the bar stays at the target (it does not snap back)"
+    NAME46 = "46 a seek swipe shows at once, sends one seek immediately, and the bar stays at the target (it does not snap back)"
     def t46():
         seek_fresh()
         page.evaluate("nudgeSeek(1)")
@@ -804,14 +804,16 @@ with sync_playwright() as p:
         check(NAME54B, abs(a - 60300) < 600, json.dumps(a))
     guard(NAME54B, t54b)
 
-    NAME56 = "56 Next pressed while a swipe is still inside its debounce: that swipe is never sent"
+    NAME56 = "56 Next cancels a second pending swipe; the leading seek is never repeated"
     def t56():
         seek_fresh()
+        page.evaluate("nudgeSeek(1)")
+        page.wait_for_timeout(80)
         page.evaluate("nudgeSeek(1); press('next')")
         page.wait_for_timeout(900)
         sent = page.evaluate("async () => Promise.all(window.__sent.map(async b => await openMessage(b)))")
         names = [m.get("c") for m in sent]
-        check(NAME56, "seek" not in names and "next" in names, json.dumps(names))
+        check(NAME56, names.count("seek") == 1 and "next" in names, json.dumps(names))
     guard(NAME56, t56)
 
     NAME57 = "57 a seek to the very end of the song is never repeated by the resend"
