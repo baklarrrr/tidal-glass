@@ -160,7 +160,8 @@ def main():
                 page.reload()
                 assert page.locator("#setupTitle").inner_text() == "iPhone playback"
                 page.goto(base+"sound/")
-                assert page.locator("#setupTitle").inner_text() == "iPhone playback"
+                assert page.locator("#setupTitle").inner_text() == "Sound Lab on iPhone"
+                assert "Android companion" in page.locator("#setupOption").inner_text()
                 assert not any(try_commands(page))
                 receipt("iPhone choice persists across Tidal and Sound Lab with zero Android transport")
                 page.locator("#chooseAgain").click()
@@ -248,7 +249,8 @@ def main():
                 assert page.locator("#useIphone").is_visible()
                 page.locator("#useIphone").click()
                 page.goto(base+"sound/")
-                assert page.locator("#setupTitle").inner_text() == "iPhone playback"
+                assert page.locator("#setupTitle").inner_text() == "Sound Lab on iPhone"
+                assert "Android companion" in page.locator("#setupOption").inner_text()
                 assert not any(try_commands(page))
                 receipt("offline cold reopen through both root and Sound Lab launcher serves safe iPhone mode")
                 assert not errors, errors

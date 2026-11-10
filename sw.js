@@ -4,7 +4,7 @@
 // Network first, so an update shows up on the very next launch; the copy is only the fallback.
 // Only this site's own files are handled; the phone link (MQTT over WebSocket) and artwork always go
 // to the network.
-const CACHE = 'tidal-glass-v20';
+const CACHE = 'tidal-glass-v21';
 const SHELL = ['./', 'index.html', 'style.css', 'app.js', 'vendor/mqtt.min.js', 'icon.svg', 'icon-mono.svg', 'sound/', 'sound/index.html', 'sound/icon-mono.svg'];
 
 // An open pre-v20 page can send to Android even after the new worker claims it.
@@ -12,9 +12,11 @@ const SHELL = ['./', 'index.html', 'style.css', 'app.js', 'vendor/mqtt.min.js', 
 const UPGRADE_FLAG = new URL('.reopen-for-phone-choice-v20', self.registration.scope).href;
 self.addEventListener('install', event => {
   event.waitUntil((async () => {
+    const priorShells = (await caches.keys()).filter(key => /^tidal-glass-v\d+$/.test(key) && key !== CACHE);
+    const oldOrUnknown = !priorShells.length || priorShells.some(key => Number(key.slice('tidal-glass-v'.length)) < 20);
     const cache = await caches.open(CACHE);
     await cache.addAll(SHELL.map(path => new Request(path, {cache: 'reload'})));
-    if (self.registration.active && CACHE === 'tidal-glass-v20') {
+    if (self.registration.active && oldOrUnknown) {
       await cache.put(UPGRADE_FLAG, new Response('1'));
     }
     await self.skipWaiting();

@@ -180,6 +180,11 @@ function deviceScreen(mode, message = '') {
   $('setupHint').textContent = message || (iphone ? 'Choose AirPlay & Bluetooth, then your Meta Ray-Ban Display.'
     : android ? 'Music may play on its speaker. Check the Android audio output first.'
     : 'iPhone uses Bluetooth. Android uses its own audio output.');
+  if (iphone && APP_MODE === 'sound') {
+    $('setupTitle').textContent = 'Sound Lab on iPhone';
+    $('setupOption').textContent = 'The equalizer uses the Android companion.';
+    $('setupHint').textContent = 'For iPhone audio, choose your glasses under AirPlay & Bluetooth in TIDAL.';
+  }
   if (android && !pairing) {
     $('setupTitle').textContent = 'Connect your Android';
     $('setupOption').textContent = 'Sound and playback controls need the Tidal Glass companion.';
@@ -280,7 +285,7 @@ function linkUp() {
 // (Bakar 2026-10-25: there a press waited 20-60 s for a broker; on a PC 2 s). Sent sealed once per
 // visit, on its first broker connect, with the previous visit's whole record (kept here when the page
 // is hidden, so a visit that never reached the phone still gets reported). The phone ignores it.
-const BUILD = 20;
+const BUILD = 21;
 let visit = null;
 let hiddenAt = 0;
 
