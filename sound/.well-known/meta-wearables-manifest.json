@@ -1,7 +1,7 @@
 {
   "version": 1,
   "name": "Sound Lab",
-  "description": "Volume and Bluetooth output for TIDAL on your iPhone.",
+  "description": "Adjust listening volume with touch gestures and find the iPhone’s Bluetooth audio output.",
   "appearance": {
     "theme_color": "#2FD8EC",
     "icon_background": {

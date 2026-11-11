@@ -15,8 +15,8 @@
 const HISTORY_LIMIT = 4;   // the glasses keep at most five history entries including the first page
 const $ = (id) => document.getElementById(id);
 
-// The same page is also the Sound Lab app (opened from ./sound/), which starts on its Sound screen.
-const APP_MODE = new URLSearchParams(location.search).get('app') === 'sound' ? 'sound' : 'tidal';
+const ASSET_ROOT = new URL('.', document.currentScript.src);
+const APP_MODE = document.querySelector('meta[name="application-name"]').content === 'Sound Lab' ? 'sound' : 'tidal';
 const ROOT = APP_MODE === 'sound' ? { screen: 'sound' } : { screen: 'now' };
 // Presses that Tidal answers with a fresh state; anything else must not raise "not answering".
 // The phone answers hello and snd every time, so a phone that stays silent shows as "not answering"
@@ -196,6 +196,16 @@ async function controlAndroid(event) {
   const requestedPair = pairing;
   const visitId = 'android:' + toB64url(crypto.getRandomValues(new Uint8Array(12)));
   try {
+    // Sound Lab has its own installable entry. Only its explicit companion
+    // action needs the shared Android player and EQ panels.
+    if (!$('now')) {
+      const response = await fetch(new URL('index.html', ASSET_ROOT));
+      if (!response.ok) throw new Error('Player unavailable');
+      const player = new DOMParser().parseFromString(await response.text(), 'text/html');
+      const panels = player.querySelectorAll('main > section:not(#setup)');
+      if (!player.getElementById('now') || !player.getElementById('sound')) throw new Error('Player unavailable');
+      if (!$('now')) $('setup').before(...panels);
+    }
     const selectedKey = await crypto.subtle.importKey('raw', fromB64url(requestedPair.k), 'AES-GCM', false, ['encrypt','decrypt']);
     if (generation !== connectionGeneration || requestedPair !== pairing || document.visibilityState !== 'visible'
         || $('setup').hidden || $('useAndroid').hidden) return;
@@ -366,7 +376,7 @@ function loadMqtt() {
   mqttTries++;
   mqttLoading = true;
   const s = document.createElement('script');
-  s.src = 'vendor/mqtt.min.js';
+  s.src = new URL('vendor/mqtt.min.js', ASSET_ROOT);
   s.onload = () => { mqttLoading = false; if (document.visibilityState === 'visible') openLink(); };
   s.onerror = () => { mqttLoading = false; setTimeout(loadMqtt, 3000); };
   document.head.appendChild(s);
@@ -2055,12 +2065,13 @@ function registerVoiceTools() {
 
 function registerServiceWorker() {
   if (!('serviceWorker' in navigator)) return;
-  try { navigator.serviceWorker.register('sw.js').catch(() => {}); } catch (e) { /* optional */ }
+  try { navigator.serviceWorker.register(new URL('sw.js', ASSET_ROOT)).catch(() => {}); } catch (e) { /* optional */ }
 }
 
 // ---- wiring ------------------------------------------------------------------------------
 
 function wire() {
+  document.querySelectorAll('.device-switch').forEach(button => button.addEventListener('click', returnToIphone));
   // Any swipe or pinch wakes the page from calm before anything else handles it.
   document.addEventListener('keydown', wakeUp, true);
   document.addEventListener('pointerdown', wakeUp, true);
@@ -2135,19 +2146,21 @@ function wire() {
 }
 
 function main() {
+  // Old Sound Lab registrations used this query on the TIDAL entry. Move
+  // them to the real Sound Lab URL so metadata, assets and refresh agree.
+  if (APP_MODE === 'tidal' && new URLSearchParams(location.search).get('app') === 'sound') {
+    const sound = new URL('sound/', ASSET_ROOT);
+    const bridge = new URLSearchParams(location.hash.slice(1)).get('androidBridge');
+    if (bridge) sound.hash = new URLSearchParams({androidBridge: bridge}).toString();
+    location.replace(sound.href);
+    return;
+  }
   // A link on the glasses would open TIDAL in the glasses browser. Offer the
   // official universal link only on the iPhone, where iOS can open its player.
   $('openTidal').hidden = !/\biPhone\b/i.test(navigator.userAgent);
-  if (APP_MODE === 'sound') {
-    document.title = 'Sound Lab';
-    $('setup').querySelector('use').setAttribute('href', 'sound/icon-mono.svg#glyph');
-    $('setupTitle').textContent = 'Sound Lab on iPhone';
-    $('setupOption').textContent = 'Swipe the right temple with two fingers. Forward raises the volume. Backward lowers it.';
-  }
   registerServiceWorker();
   pairing = readPairing();
   $('useAndroid').addEventListener('click', controlAndroid);
-  document.querySelectorAll('.device-switch').forEach(button => button.addEventListener('click', returnToIphone));
   function suspend() {
     if (androidVisit) leaveAndroid();
     showIphone();

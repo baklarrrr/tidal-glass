@@ -1,7 +1,7 @@
 {
   "version": 1,
-  "name": "Tidal Glass",
-  "description": "Listen to TIDAL from your iPhone through Meta Ray-Ban Display.",
+  "name": "TIDAL Glass",
+  "description": "Play tracks in TIDAL on your iPhone and use the glasses’ playback controls.",
   "appearance": {
     "theme_color": "#2FD8EC",
     "icon_background": {

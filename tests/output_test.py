@@ -82,7 +82,7 @@ def receipt(label):
     print("PASS", label, flush=True)
 
 
-def upgrade_open_page(browser, baseline, chooser=False, paired_option=False):
+def upgrade_open_page(browser, baseline, chooser=False, paired_option=False, sound_alias=False):
     # The old page has no listener for worker messages. A real worker update must
     # replace that document, otherwise its already-loaded controls remain active.
     current = Path(__file__).resolve().parents[1]
@@ -104,21 +104,27 @@ def upgrade_open_page(browser, baseline, chooser=False, paired_option=False):
             base = f"http://127.0.0.1:{srv.server_port}/"
             page = ctx.new_page()
             seed(page, base)
-            page.goto(base)
+            page.goto(base + ("sound/" if sound_alias else ""))
             page.wait_for_function("navigator.serviceWorker.controller !== null")
-            if chooser:
+            if sound_alias:
+                assert page.url == base + "?app=sound"
+            elif chooser:
                 assert page.locator("#useIphone").is_visible()
             elif paired_option:
                 page.locator("#useAndroid").wait_for()
             else:
                 page.wait_for_function("typeof key !== 'undefined' && key !== null")
-            page.evaluate("caches.open('quran-glass-v13').then(c => c.put('sibling-state',new Response('preserve')))")
+            sibling_url = base + "sibling-state"
+            page.evaluate("u => caches.open('quran-glass-v13').then(c => c.put(u,new Response('preserve')))", sibling_url)
             served[0] = current
             page.evaluate("navigator.serviceWorker.getRegistration().then(r => {r.update().catch(()=>{});})")
+            if sound_alias:
+                page.wait_for_url(base + "sound/")
+                assert page.title() == "Sound Lab"
             page.locator("#audioRoute").wait_for(timeout=15000)
             assert not page.locator("#useAndroid").is_visible()
             assert page.evaluate("linksToAndroid === 0 && sent.length === 0")
-            assert page.evaluate("caches.open('quran-glass-v13').then(c => c.match('sibling-state')).then(r => r.text())") == "preserve"
+            assert page.evaluate("u => caches.open('quran-glass-v13').then(c => c.match(u)).then(r => r.text())", sibling_url) == "preserve"
             receipt("the open previous release migrates to the iPhone route with no taps and preserves sibling caches")
         finally:
             srv.shutdown()
@@ -130,6 +136,7 @@ def main():
     parser.add_argument("--baseline", type=Path)
     parser.add_argument("--chooser-baseline", type=Path)
     parser.add_argument("--paired-option-baseline", type=Path)
+    parser.add_argument("--sound-alias-baseline", type=Path)
     parser.add_argument("--shots", type=Path)
     args = parser.parse_args()
     if args.shots:
@@ -142,6 +149,8 @@ def main():
     with sync_playwright() as pw:
         browser = pw.chromium.launch(channel="chrome")
         try:
+            if args.sound_alias_baseline:
+                upgrade_open_page(browser, args.sound_alias_baseline, sound_alias=True)
             if args.paired_option_baseline:
                 upgrade_open_page(browser, args.paired_option_baseline, paired_option=True)
             if args.chooser_baseline:
@@ -201,6 +210,8 @@ def main():
                 shot(page, "02-iphone-paired")
                 page.goto(base+"sound/")
                 assert page.locator("#setupTitle").inner_text() == "Sound Lab on iPhone"
+                assert page.url == base + "sound/"
+                assert page.title() == "Sound Lab"
                 assert not page.locator("#setupHint").is_visible()
                 assert page.evaluate("linksToAndroid === 0 && sent.length === 0")
                 assert not any(try_commands(page))

@@ -3,19 +3,29 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="Set the volume and Bluetooth output for TIDAL on your iPhone.">
+  <meta name="application-name" content="Sound Lab">
+  <meta name="theme-color" content="#000000">
+  <meta name="description" content="Adjust listening volume with touch gestures and find the iPhone’s Bluetooth audio output.">
   <meta name="mrbd-web-app-capable" content="yes">
   <meta name="robots" content="noindex, nofollow">
   <title>Sound Lab</title>
-  <link rel="icon" href="icon.svg" type="image/svg+xml">
-  <style>html, body { margin: 0; background: #000; }</style>
-  <!-- The normal Sound Lab tile uses the iPhone. Ignore old Android install fragments. -->
-  <script>
-    const target = new URL('../?app=sound', location.href);
-    const bridge = new URLSearchParams(location.hash.slice(1)).get('androidBridge');
-    if (bridge) target.hash = new URLSearchParams({androidBridge: bridge}).toString();
-    location.replace(target.href);
-  </script>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon-192.png" sizes="192x192" type="image/png">
+  <link rel="apple-touch-icon" href="icon-192.png" sizes="192x192">
+  <link rel="stylesheet" href="../style.css">
 </head>
-<body></body>
+<body>
+  <main>
+    <section id="setup" class="screen center" aria-labelledby="setupTitle">
+      <svg class="hero" viewBox="0 0 64 64" aria-hidden="true"><use href="icon-mono.svg#glyph"/></svg>
+      <h1 id="setupTitle" tabindex="-1">Sound Lab on iPhone</h1>
+      <p id="setupOption" class="artist">Swipe the right temple with two fingers. Forward raises the volume. Backward lowers it.</p>
+      <a id="openTidal" href="https://tidal.com/my-collection" referrerpolicy="no-referrer" hidden>Open my TIDAL library</a>
+      <p id="audioRoute">Sound coming from your phone? In TIDAL’s Now Playing, tap the speaker → AirPlay &amp; Bluetooth → your glasses.</p>
+      <p id="setupHint" class="album" role="status" hidden></p>
+      <button id="useAndroid" class="android-option" type="button" hidden>Control paired Android</button>
+    </section>
+  </main>
+  <script src="../app.js"></script>
+</body>
 </html>
