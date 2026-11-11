@@ -22,7 +22,7 @@ from playwright.sync_api import sync_playwright
 
 KEY = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
 BASE = (sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:47611/").rstrip("/") + "/"
-URL = f"{BASE}index.html?test=1#t=tgpresstest&k={KEY}"
+URL = f"{BASE}index.html?test=1#androidBridge=tgpresstest~{KEY}"
 STATE = {"t": "state", "acc": True, "ses": True, "play": False, "buf": False, "ti": "Test song", "ar": "Test artist",
          "al": "Test album", "dur": 200000, "pos": 50000, "liked": False, "seek": True, "vol": "8/15", "q": [], "qa": -1}
 # A library page as the phone sends it (pages of 10); more than fits on screen.

@@ -82,17 +82,18 @@ function toB64url(bytes) {
 }
 
 function readPairing() {
-  const p = new URLSearchParams(location.hash.slice(1));
-  let t = p.get('t');
-  let k = p.get('k');
-  try {
-    if (t && k) localStorage.setItem('tg.pair', JSON.stringify({ t, k }));
-    else {
-      const saved = JSON.parse(localStorage.getItem('tg.pair') || 'null');
-      if (saved) ({ t, k } = saved);
-    }
-  } catch (e) { /* storage may be unavailable; the fragment still works */ }
-  return t && k ? { t, k } : null;
+  // New companion enrollment has a distinct field. Neither an old install
+  // fragment nor a stored key identifies the iPhone's current audio route.
+  const bridge = new URLSearchParams(location.hash.slice(1)).get('androidBridge');
+  const match = /^([A-Za-z0-9_/-]+)~([A-Za-z0-9_-]{43})$/.exec(bridge || '');
+  if (!match) {
+    if (location.hash) history.replaceState(history.state, '', location.pathname + location.search);
+    return null;
+  }
+  const pair = { t: match[1], k: match[2] };
+  try { localStorage.setItem('tg.pair', JSON.stringify(pair)); }
+  catch { return null; }
+  return pair;
 }
 
 // A pairing identifies an Android relay. Only an explicit choice in this visible visit
@@ -2134,13 +2135,17 @@ function wire() {
 }
 
 function main() {
-  pairing = readPairing();
+  // A link on the glasses would open TIDAL in the glasses browser. Offer the
+  // official universal link only on the iPhone, where iOS can open its player.
+  $('openTidal').hidden = !/\biPhone\b/i.test(navigator.userAgent);
   if (APP_MODE === 'sound') {
     document.title = 'Sound Lab';
     $('setup').querySelector('use').setAttribute('href', 'sound/icon-mono.svg#glyph');
     $('setupTitle').textContent = 'Sound Lab on iPhone';
-    $('setupOption').textContent = 'Volume on iPhone and glasses. The Sound Lab equalizer runs on Android.';
+    $('setupOption').textContent = 'Swipe the right temple with two fingers. Forward raises the volume. Backward lowers it.';
   }
+  registerServiceWorker();
+  pairing = readPairing();
   $('useAndroid').addEventListener('click', controlAndroid);
   document.querySelectorAll('.device-switch').forEach(button => button.addEventListener('click', returnToIphone));
   function suspend() {
@@ -2156,12 +2161,8 @@ function main() {
   window.addEventListener('pageshow', event => { if (event.persisted) enter(); });
   window.addEventListener('hashchange', () => { pairing = readPairing(); enter(); });
   window.addEventListener('storage', event => {
-    if (event.key === 'tg.pair' || event.key === null) {
-      try { pairing = JSON.parse(localStorage.getItem('tg.pair') || 'null'); } catch { pairing = null; }
-    }
     if (event.key === OUTPUT_KEY || event.key === 'tg.pair' || event.key === null) suspend();
   });
-  registerServiceWorker();
   enter();
 }
 

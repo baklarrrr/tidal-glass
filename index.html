@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="application-name" content="Tidal Glass">
-  <meta name="description" content="TIDAL playback from iPhone over Bluetooth, with optional controls for a paired Android phone.">
+  <meta name="description" content="Listen to TIDAL from your iPhone through Meta Ray-Ban Display.">
   <meta name="mrbd-web-app-capable" content="yes">
   <meta name="robots" content="noindex, nofollow">
   <meta name="theme-color" content="#000000">
@@ -163,7 +163,9 @@
     <section id="setup" class="screen center" aria-labelledby="setupTitle">
       <svg class="hero" viewBox="0 0 64 64" aria-hidden="true"><use href="icon-mono.svg#glyph"/></svg>
       <h1 id="setupTitle" tabindex="-1">TIDAL on iPhone</h1>
-      <p id="setupOption" class="artist">Playback and volume use the native controls on your iPhone and glasses.</p>
+      <p id="setupOption" class="artist">Play a track in TIDAL on your iPhone. With the display asleep, tap the right temple to pause or resume.</p>
+      <a id="openTidal" href="https://tidal.com/my-collection" referrerpolicy="no-referrer" hidden>Open my TIDAL library</a>
+      <p id="audioRoute">Sound coming from your phone? In TIDAL’s Now Playing, tap the speaker → AirPlay &amp; Bluetooth → your glasses.</p>
       <p id="setupHint" class="album" role="status" hidden></p>
       <button id="useAndroid" class="android-option" type="button" hidden>Control paired Android</button>
     </section>

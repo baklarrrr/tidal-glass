@@ -23,6 +23,7 @@ FAKE = """() => {
   Object.defineProperty(document, 'modelContext', { value: {registerTool(t) {window.voiceTools[t.name] = t;}} });
 }"""
 PAIR = {"t": "offline-test-device", "k": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}
+BRIDGE = "#androidBridge=" + PAIR["t"] + "~" + PAIR["k"]
 STATE = {"t": "state", "acc": True, "ses": True, "ti": "Test track", "ar": "Test artist", "play": False,
          "dur": 200000, "pos": 1000, "seek": True, "vol": "5/15", "q": []}
 MUTATIONS = ["play", "volSet", "next", "like", "skip", "seek", "libplay", "sndSet",
@@ -81,7 +82,7 @@ def receipt(label):
     print("PASS", label, flush=True)
 
 
-def upgrade_open_page(browser, baseline, chooser=False):
+def upgrade_open_page(browser, baseline, chooser=False, paired_option=False):
     # The old page has no listener for worker messages. A real worker update must
     # replace that document, otherwise its already-loaded controls remain active.
     current = Path(__file__).resolve().parents[1]
@@ -107,15 +108,18 @@ def upgrade_open_page(browser, baseline, chooser=False):
             page.wait_for_function("navigator.serviceWorker.controller !== null")
             if chooser:
                 assert page.locator("#useIphone").is_visible()
+            elif paired_option:
+                page.locator("#useAndroid").wait_for()
             else:
                 page.wait_for_function("typeof key !== 'undefined' && key !== null")
             page.evaluate("caches.open('quran-glass-v13').then(c => c.put('sibling-state',new Response('preserve')))")
             served[0] = current
             page.evaluate("navigator.serviceWorker.getRegistration().then(r => {r.update().catch(()=>{});})")
-            page.get_by_role("heading", name="TIDAL on iPhone", exact=True).wait_for(timeout=15000)
+            page.locator("#audioRoute").wait_for(timeout=15000)
+            assert not page.locator("#useAndroid").is_visible()
             assert page.evaluate("linksToAndroid === 0 && sent.length === 0")
             assert page.evaluate("caches.open('quran-glass-v13').then(c => c.match('sibling-state')).then(r => r.text())") == "preserve"
-            receipt(("the open v21 chooser" if chooser else "the open legacy control page") + " migrates to iPhone with no taps and preserves sibling caches")
+            receipt("the open previous release migrates to the iPhone route with no taps and preserves sibling caches")
         finally:
             srv.shutdown()
             worker.join()
@@ -125,6 +129,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--baseline", type=Path)
     parser.add_argument("--chooser-baseline", type=Path)
+    parser.add_argument("--paired-option-baseline", type=Path)
     parser.add_argument("--shots", type=Path)
     args = parser.parse_args()
     if args.shots:
@@ -137,6 +142,8 @@ def main():
     with sync_playwright() as pw:
         browser = pw.chromium.launch(channel="chrome")
         try:
+            if args.paired_option_baseline:
+                upgrade_open_page(browser, args.paired_option_baseline, paired_option=True)
             if args.chooser_baseline:
                 upgrade_open_page(browser, args.chooser_baseline, chooser=True)
                 with server(args.chooser_baseline) as base, context(browser) as ctx:
@@ -178,9 +185,12 @@ def main():
                 seed(page, base)
                 for saved in (None, "choose", "android:previous-visit", "iphone"):
                     page.evaluate("choice => choice ? localStorage.setItem('tg.output.v1',choice) : localStorage.removeItem('tg.output.v1')", saved)
-                    page.goto(base)
+                    page.goto(base + "#t=obsolete-install&k=obsolete-key")
                     assert page.locator("#setupTitle").inner_text() == "TIDAL on iPhone"
-                    assert page.locator("#useAndroid").is_visible()
+                    assert not page.locator("#useAndroid").is_visible()
+                    assert "Android" not in page.locator("body").inner_text()
+                    assert page.evaluate("JSON.parse(localStorage.getItem('tg.pair')).t") == PAIR["t"]
+                    page.wait_for_function("location.hash === ''")
                     assert page.locator("#useIphone, #chooseAgain, #confirmAndroid").count() == 0
                     assert page.evaluate("document.activeElement.id === 'setupTitle'")
                     page.keyboard.press("Enter")
@@ -196,6 +206,20 @@ def main():
                 assert not any(try_commands(page))
                 shot(page, "03-sound-iphone")
                 receipt("Sound Lab opens in iPhone mode without a picker, setup steps, or Android queries")
+                assert "two fingers" in page.locator("#setupOption").inner_text()
+                assert "Android" not in page.locator("body").inner_text()
+                assert not page.locator("#openTidal").is_visible()
+                with browser.new_context(**pw.devices["iPhone 13"]) as phone:
+                    iphone = phone.new_page()
+                    iphone.goto(base)
+                    link = iphone.get_by_role("link", name="Open my TIDAL library")
+                    assert link.is_visible()
+                    assert link.get_attribute("href") == "https://tidal.com/my-collection"
+                    iphone.route("https://tidal.com/my-collection", lambda route: route.fulfill(body="TIDAL library"))
+                    link.click()
+                    assert iphone.url == "https://tidal.com/my-collection"
+                    receipt("iPhone browser hands off the TIDAL library URL; glasses do not open the phone link locally")
+                page.goto(base + "sound/" + BRIDGE)
                 select_android(page)
                 state(page, True)
                 assert not any(try_commands(page))
@@ -206,7 +230,7 @@ def main():
                 assert page.evaluate("send('sndTest')")
                 assert sent(page).count("sndTest") == 1
                 receipt("Sound Lab enables Android only after explicit choice and a live authenticated report")
-                page.goto(base)
+                page.goto(base + BRIDGE)
                 assert page.locator("#useAndroid").is_visible()
                 select_android(page)
                 state(page)
@@ -268,11 +292,13 @@ def main():
                 receipt("returning from a suspended page requires a fresh foreground Android choice")
                 page.wait_for_function("navigator.serviceWorker.controller !== null")
                 ctx.set_offline(True)
-                page.reload(wait_until="domcontentloaded")
+                page.goto(base, wait_until="domcontentloaded")
                 assert page.locator("#setupTitle").inner_text() == "TIDAL on iPhone"
+                assert not page.locator("#useAndroid").is_visible()
                 page.goto(base+"sound/")
                 assert page.locator("#setupTitle").inner_text() == "Sound Lab on iPhone"
-                assert "equalizer runs on Android" in page.locator("#setupOption").inner_text()
+                assert "Android" not in page.locator("body").inner_text()
+                assert not page.locator("#useAndroid").is_visible()
                 assert not any(try_commands(page))
                 receipt("offline cold reopen through both root and Sound Lab launcher serves safe iPhone mode")
                 assert not errors, errors

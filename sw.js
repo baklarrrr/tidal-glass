@@ -4,16 +4,16 @@
 // Network first, so an update shows up on the very next launch; the copy is only the fallback.
 // Only this site's own files are handled; the phone link (MQTT over WebSocket) and artwork always go
 // to the network.
-const CACHE = 'tidal-glass-v22';
+const CACHE = 'tidal-glass-v23';
 const SHELL = ['./', 'index.html', 'style.css', 'app.js', 'vendor/mqtt.min.js', 'icon.svg', 'icon-mono.svg', 'sound/', 'sound/index.html', 'sound/icon-mono.svg'];
 
 // Reopen older versions so an open chooser or legacy Android control page picks up iPhone mode.
 // Carry the upgrade flag across the install/activate lifetime exactly once.
-const UPGRADE_FLAG = new URL('.reopen-for-iphone-default-v22', self.registration.scope).href;
+const UPGRADE_FLAG = new URL('.reopen-for-iphone-only-v23', self.registration.scope).href;
 self.addEventListener('install', event => {
   event.waitUntil((async () => {
     const priorShells = (await caches.keys()).filter(key => /^tidal-glass-v\d+$/.test(key) && key !== CACHE);
-    const oldOrUnknown = !priorShells.length || priorShells.some(key => Number(key.slice('tidal-glass-v'.length)) < 22);
+    const oldOrUnknown = !priorShells.length || priorShells.some(key => Number(key.slice('tidal-glass-v'.length)) < 23);
     const cache = await caches.open(CACHE);
     await cache.addAll(SHELL.map(path => new Request(path, {cache: 'reload'})));
     if (self.registration.active && oldOrUnknown) {

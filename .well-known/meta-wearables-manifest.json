@@ -1,7 +1,7 @@
 {
   "version": 1,
   "name": "Tidal Glass",
-  "description": "TIDAL playback from iPhone over Bluetooth, with optional controls for a paired Android phone.",
+  "description": "Listen to TIDAL from your iPhone through Meta Ray-Ban Display.",
   "appearance": {
     "theme_color": "#2FD8EC",
     "icon_background": {

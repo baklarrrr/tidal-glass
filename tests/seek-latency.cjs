@@ -26,7 +26,7 @@ const types = {'.html':'text/html','.js':'text/javascript','.css':'text/css','.s
     window.__testLink={connected:true,publish(_topic,body){window.__sent.push({at:performance.now(),body});},end(){}};
     document.addEventListener('keydown',e=>{if(e.target.id==='seek')window.inputAt=performance.now();},true);
   });
-  await page.goto(base+'/index.html#t=seek-test&k=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA');
+  await page.goto(base+'/index.html#androidBridge=seek-test~AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA');
   if (await page.locator('#useAndroid').count()) {
     await page.click('#useAndroid');
   }

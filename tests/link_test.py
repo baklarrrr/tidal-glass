@@ -20,7 +20,7 @@ from playwright.sync_api import sync_playwright
 
 KEY = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
 BASE = (sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:47611/").rstrip("/") + "/"
-URL = f"{BASE}index.html?test=1#t=tglinktest&k={KEY}"
+URL = f"{BASE}index.html?test=1#androidBridge=tglinktest~{KEY}"
 # Served in place of vendor/mqtt.min.js.
 FAKE_MQTT = """
 window.__clients = [];

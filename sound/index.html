@@ -3,16 +3,19 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="Sound Lab shapes TIDAL audio on a paired Android phone. For iPhone playback, use Bluetooth.">
+  <meta name="description" content="Set the volume and Bluetooth output for TIDAL on your iPhone.">
   <meta name="mrbd-web-app-capable" content="yes">
   <meta name="robots" content="noindex, nofollow">
   <title>Sound Lab</title>
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <style>html, body { margin: 0; background: #000; }</style>
-  <!-- Sound Lab is Tidal Glass opened on its Sound screen. This folder only exists so the glasses
-       launcher gets its own name and icon (read from ./.well-known/); the pairing in the fragment
-       is carried over and never reaches a server. -->
-  <script>location.replace('../?app=sound' + location.hash);</script>
+  <!-- The normal Sound Lab tile uses the iPhone. Ignore old Android install fragments. -->
+  <script>
+    const target = new URL('../?app=sound', location.href);
+    const bridge = new URLSearchParams(location.hash.slice(1)).get('androidBridge');
+    if (bridge) target.hash = new URLSearchParams({androidBridge: bridge}).toString();
+    location.replace(target.href);
+  </script>
 </head>
 <body></body>
 </html>

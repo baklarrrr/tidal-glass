@@ -326,3 +326,6 @@ body.stale #now .track, body.stale #now .seek, body.stale #now .row.main { opaci
 .device-switch { padding: 3px 9px; font-size: 14px; white-space: nowrap; }
 #setup { overflow-y: auto; }
 #setupOption, #setupHint { white-space: normal; }
+#setupOption { display: block; overflow: visible; }
+#audioRoute { color: var(--dim); font-size: 17px; line-height: 1.4; margin: 0; max-width: 34em; }
+#openTidal { color: var(--accent); font-size: 18px; padding: 12px 0; }

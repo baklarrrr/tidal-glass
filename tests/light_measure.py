@@ -95,7 +95,7 @@ with sync_playwright() as p:
     ctx = b.new_context(viewport={"width": 600, "height": 600}, service_workers="block")
     pg = ctx.new_page()
     pg.add_init_script(LINK)
-    pg.goto(f"{BASE}index.html#t=lighttest&k={KEY}")
+    pg.goto(f"{BASE}index.html#androidBridge=lighttest~{KEY}")
     pg.locator("#useAndroid").click()
     pg.wait_for_function("typeof key !== 'undefined' && key !== null")
     for cover, art in COVERS.items():
@@ -115,7 +115,7 @@ with sync_playwright() as p:
 
     sp = ctx.new_page()
     sp.add_init_script(LINK)
-    sp.goto(f"{BASE}index.html?app=sound#t=lighttest&k={KEY}")
+    sp.goto(f"{BASE}index.html?app=sound#androidBridge=lighttest~{KEY}")
     sp.locator("#useAndroid").click()
     sp.wait_for_function("typeof key !== 'undefined' && key !== null")
     sp.evaluate("async m => { await handle(await seal({...m, at: Date.now()})); }", SND)
