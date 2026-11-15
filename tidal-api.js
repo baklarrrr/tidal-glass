@@ -420,7 +420,7 @@ const TidalAPI = (() => {
     const ids = [...new Set(keys.filter((k) => k.startsWith(type + ':') && lacking(k)).map((k) => k.slice(type.length + 1)))];
     const base = await common();
     for (let i = 0; i < ids.length; i += CHUNK) {
-      const doc = await get('/' + type, { ...base, 'filter[id]': ids.slice(i, i + CHUNK), include: WANTS[type] });
+      const doc = await get('/' + type, { countryCode: base.countryCode, 'filter[id]': ids.slice(i, i + CHUNK), include: WANTS[type] });
       absorb(doc);
       // A resource TIDAL answered without a relationship has none: do not ask again.
       for (const id of ids.slice(i, i + CHUNK)) {
@@ -432,35 +432,82 @@ const TidalAPI = (() => {
 
   // ---- the library ------------------------------------------------------------------------------------------
 
-  // Where each list lives. `rel` is the relationship that holds its rows.
-  async function source(listKey) {
+  // Where each list lives. `rel` is the relationship that holds its rows. Each list has one or two
+  // ways of asking, tried in order: first exactly as TIDAL's API description (OpenAPI 1.10) words it,
+  // then the older wording. The way that answered is remembered for the rest of the visit, so a
+  // difference between the description and the live service costs one extra request, not a dead menu.
+  //   send: which of the common parameters this request carries ('cc' countryCode, 'locale').
+  //   shape 'search': the answer is the search result itself, its rows under relationships.topHits.
+  async function sources(listKey) {
     const who = await whoAmI();
     const [kind, ...rest] = listKey.split(':');
-    const id = encodeURIComponent(rest.join(':'));
+    const raw = rest.join(':');
+    const id = encodeURIComponent(raw);
+    const mine = (name, send) => [
+      { path: `/${name}/me/relationships/items`, rel: 'items', send },
+      { path: `/${name}/${encodeURIComponent(who.id)}/relationships/items`, rel: 'items', send: ['cc', 'locale'] },
+    ];
     switch (kind) {
-      case 'tracks': return { path: `/userCollectionTracks/${encodeURIComponent(who.id)}/relationships/items`, rel: 'items' };
-      case 'playlists': return { path: `/userCollectionPlaylists/${encodeURIComponent(who.id)}/relationships/items`, rel: 'items' };
-      case 'albums': return { path: `/userCollectionAlbums/${encodeURIComponent(who.id)}/relationships/items`, rel: 'items' };
-      case 'artists': return { path: `/userCollectionArtists/${encodeURIComponent(who.id)}/relationships/items`, rel: 'items' };
-      case 'playlist': return { path: `/playlists/${id}/relationships/items`, rel: 'items' };
-      case 'album': return { path: `/albums/${id}/relationships/items`, rel: 'items' };
-      case 'artist': return { path: `/artists/${id}/relationships/albums`, rel: 'albums' };
-      case 'search': return { path: `/searchResults/${id}/relationships/topHits`, rel: 'topHits', extra: { explicitFilter: 'INCLUDE' } };
+      case 'tracks': return mine('userCollectionTracks', ['locale']);
+      case 'albums': return mine('userCollectionAlbums', ['locale']);
+      case 'artists': return mine('userCollectionArtists', ['locale']);
+      case 'playlists': return mine('userCollectionPlaylists', []);
+      case 'playlist': return [{ path: `/playlists/${id}/relationships/items`, rel: 'items', send: ['cc'] }];
+      case 'album': return [{ path: `/albums/${id}/relationships/items`, rel: 'items', send: ['cc'] }];
+      case 'artist': return [{ path: `/artists/${id}/relationships/albums`, rel: 'albums', send: ['cc'] }];
+      case 'search': return [
+        { path: '/searchResults', rel: 'topHits', send: ['cc'], shape: 'search', extra: { 'filter[query]': raw, explicitFilter: 'INCLUDE' } },
+        { path: `/searchResults/${id}/relationships/topHits`, rel: 'topHits', send: ['cc', 'locale'], extra: { explicitFilter: 'INCLUDE' } },
+      ];
       default: throw new TidalError('missing');
     }
   }
 
+  const answered = new Map(); // list kind -> index of the way of asking that worked
+
+  function paramsFor(src, base) {
+    const out = {};
+    if (src.send.includes('cc')) out.countryCode = base.countryCode;
+    if (src.send.includes('locale')) out.locale = base.locale;
+    return { ...out, ...(src.extra || {}), include: [src.rel] };
+  }
+
+  // The row identifiers of one answer, whichever shape it came in.
+  function rowsOf(doc, src) {
+    if (src.shape !== 'search') return Array.isArray(doc.data) ? doc.data : [];
+    const first = Array.isArray(doc.data) ? doc.data[0] : doc.data;
+    const rel = first && first.relationships && first.relationships[src.rel];
+    return rel && Array.isArray(rel.data) ? rel.data : [];
+  }
+
   // One page of a list: { keys, rows, next }. Rows have their titles; details() adds the rest.
   async function page(listKey, cursor) {
-    const src = await source(listKey);
+    const ways = await sources(listKey);
     const base = await common();
-    const doc = await get(cursor || src.path, { ...base, ...(src.extra || {}), include: [src.rel] });
+    const kind = listKey.split(':')[0];
+    let at = Math.min(answered.get(kind) || 0, ways.length - 1);
+    let doc;
+    let src;
+    for (;;) {
+      src = ways[at];
+      try {
+        doc = await get(cursor || src.path, paramsFor(src, base));
+        break;
+      } catch (e) {
+        // Refused as worded (400, 403, 404): ask the other way before giving up.
+        const refused = e.kind === 'missing' || (e.kind === 'server' && e.status >= 400 && e.status < 500);
+        if (cursor || at + 1 >= ways.length || !refused) throw e;
+        at += 1;
+      }
+    }
+    answered.set(kind, at);
     absorb(doc);
-    const keys = (Array.isArray(doc.data) ? doc.data : []).filter((r) => r && WEB[r.type]).map((r) => r.type + ':' + r.id);
+    const keys = rowsOf(doc, src).filter((r) => r && WEB[r.type]).map((r) => r.type + ':' + r.id);
     // An answer that named the rows without describing them: ask for them by id before drawing.
     const bare = keys.filter((k) => !cache.get(k) || !cache.get(k).attributes);
     for (const type of new Set(bare.map((k) => k.split(':')[0]))) await fill(type, bare);
-    const next = doc.links && typeof doc.links.next === 'string' && doc.links.next ? doc.links.next : '';
+    const links = (src.shape === 'search' && doc.data && !Array.isArray(doc.data) && doc.data.relationships && doc.data.relationships[src.rel] && doc.data.relationships[src.rel].links) || doc.links;
+    const next = links && typeof links.next === 'string' && links.next ? links.next : '';
     return { keys, rows: keys.map(rowOf).filter((r) => r && r.ti), next };
   }
 

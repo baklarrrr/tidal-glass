@@ -120,6 +120,7 @@ class MockTidal:
 
     def __init__(self, base):
         self.base = base                 # the app's own address: the only redirect the mock accepts
+        self.legacy = False              # True: only the older request wording is understood
         self.client_id = CLIENT_ID       # '' leaves tidal-config.js as committed (no client ID)
         self.challenges = {}             # code -> PKCE challenge
         self.token_n = 0
@@ -231,8 +232,23 @@ class MockTidal:
             return send({"errors": [{"code": "UNAVAILABLE"}]}, 503)
         if path == "/users/me":
             return send({"data": {"id": USER_ID, "type": "users", "attributes": {"country": "GB", "username": "mock"}}})
-        if path != "/users/me" and not path.startswith(("/trackManifests", "/trackFiles")) and q.get("countryCode") != ["GB"]:
-            return send({"errors": [{"code": "MISSING_COUNTRY"}]}, 400)
+        # self.legacy: the service only understands the older wording (numeric user id, search text in the path,
+        # countryCode everywhere). Otherwise it follows the API description: "me", filter[query], and no
+        # parameter an endpoint does not list.
+        mine = path.startswith("/userCollection")
+        if self.legacy:
+            if "/me/" in path or path == "/searchResults":
+                return send({"errors": [{"code": "NOT_FOUND"}]}, 404)
+            if not path.startswith(("/trackManifests", "/trackFiles")) and q.get("countryCode") != ["GB"]:
+                return send({"errors": [{"code": "MISSING_COUNTRY"}]}, 400)
+        else:
+            if mine and ("countryCode" in q or (path.startswith("/userCollectionPlaylists") and "locale" in q)):
+                return send({"errors": [{"code": "UNKNOWN_PARAMETER"}]}, 400)
+            if not mine and not path.startswith(("/trackManifests", "/trackFiles")) and (q.get("countryCode") != ["GB"] or "locale" in q):
+                return send({"errors": [{"code": "BAD_PARAMETERS"}]}, 400)
+            if path.startswith("/searchResults/"):
+                return send({"errors": [{"code": "NOT_FOUND"}]}, 404)
+            path = path.replace("/me/relationships/items", "/%s/relationships/items" % USER_ID) if mine else path
         ids = [x for v in q.get("filter[id]", []) for x in v.split(",")]
         inc = [x for v in q.get("include", []) for x in v.split(",")]
         if len(ids) > 20:
@@ -272,6 +288,15 @@ class MockTidal:
         if path.startswith("/artists/") and path.endswith("/relationships/albums"):
             mine = [b for b in ALBUMS if ALBUMS[b][1] == path.split("/")[2]]
             return paged([{"id": b, "type": "albums"} for b in mine], [album_res(b) for b in mine])
+        if path == "/searchResults":
+            word = (q.get("filter[query]") or [""])[0].lower()
+            if not word:
+                return send({"errors": [{"code": "MISSING_QUERY"}]}, 400)
+            hits = [track_res(t) for t in TRACKS if word in t["title"].lower()] + [album_res(b) for b in ALBUMS if word in ALBUMS[b][0].lower()] \
+                + [artist_res(a) for a in ARTISTS if word in ARTISTS[a].lower()]
+            return send({"data": [{"id": "opaque-1", "type": "searchResults",
+                                   "relationships": {"topHits": {"data": [{"id": r["id"], "type": r["type"]} for r in hits]}}}],
+                         "included": hits if "topHits" in inc else []})
         if path.startswith("/searchResults/") and path.endswith("/relationships/topHits"):
             word = path.split("/")[2].lower()
             from urllib.parse import unquote
