@@ -279,6 +279,14 @@ const TidalAPI = (() => {
     return tokens().a;
   }
 
+  // What TIDAL's own Player needs to act for the signed-in user. Renews the sign-in when due.
+  async function credentials() {
+    const token = await accessToken();
+    const who = await whoAmI();
+    const t = tokens();
+    return { token, userId: who.id, clientId: clientId(), scopes: scopes().split(/\s+/).filter(Boolean), expires: t ? t.exp : 0 };
+  }
+
   // ---- the fetch layer ----------------------------------------------------------------------------
 
   async function timedFetch(url, init = {}) {
@@ -635,7 +643,7 @@ const TidalAPI = (() => {
   return {
     configured, canSignIn, signedIn, scopes, redirectUri,
     beginLogin, hasLoginAnswer, finishLogin, signOut, offerLogin, redeemOffer,
-    page, details, playable, whoAmI,
+    page, details, playable, whoAmI, credentials,
     set onAuthLost(fn) { onAuthLost = fn; },
   };
 })();
