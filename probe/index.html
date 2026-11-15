@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>TIDAL Glass check</title>
+<style>
+  html, body { margin: 0; block-size: 100%; background: #000; color: #fff; font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { display: flex; flex-direction: column; gap: 12px; block-size: 100%; padding: 22px 28px; box-sizing: border-box; overflow: hidden; }
+  h1 { margin: 0; font-size: 26px; }
+  #code { font-size: 64px; font-weight: 700; letter-spacing: 0.08em; color: #2fd8ec; font-variant-numeric: tabular-nums; }
+  #sum { font-size: 20px; color: #d5dbe2; }
+  ul { margin: 0; padding: 0; list-style: none; font-size: 15px; color: #98a3ae; display: grid; grid-template-columns: 1fr 1fr; gap: 2px 14px; }
+  li.y { color: #fff; } li.y::before { content: "✓ "; color: #2fd8ec; } li.n::before { content: "✕ "; }
+  button { font: inherit; font-size: 20px; color: #fff; background: transparent; border: 1px solid rgba(255,255,255,.34); border-radius: 30px; padding: 12px 22px; align-self: flex-start; }
+  button:focus { outline: none; border-color: #2fd8ec; box-shadow: 0 0 0 3px #2fd8ec, 0 0 16px rgba(47,216,236,.55); }
+</style>
+</head>
+<body>
+<main>
+  <h1>TIDAL Glass check</h1>
+  <div id="code" aria-live="polite">····</div>
+  <div id="sum">Pinch “Play test sound”. You should hear a short tone.</div>
+  <button id="tone" autofocus>Play test sound</button>
+  <ul id="list"></ul>
+</main>
+<script>
+// Reads what this browser can do. Nothing is stored or sent anywhere.
+const R = [];
+const add = (name, ok) => { R.push([name, !!ok]); };
+const cfg = (ct) => [{ initDataTypes: ['cenc'], audioCapabilities: [{ contentType: ct }] }];
+async function eme(sys, ct) {
+  try { await navigator.requestMediaKeySystemAccess(sys, cfg(ct)); return true; } catch { return false; }
+}
+function render() {
+  const bits = R.map(r => r[1] ? 1 : 0);
+  while (bits.length % 4) bits.push(0);
+  let code = '';
+  for (let i = 0; i < bits.length; i += 4) code += parseInt(bits.slice(i, i + 4).join(''), 2).toString(16).toUpperCase();
+  document.getElementById('code').textContent = code;
+  document.getElementById('list').innerHTML = R.map(r => `<li class="${r[1] ? 'y' : 'n'}">${r[0]}</li>`).join('');
+}
+(async () => {
+  const a = document.createElement('audio');
+  add('Audio element', !!a.canPlayType);
+  add('AAC', a.canPlayType('audio/mp4; codecs="mp4a.40.2"'));
+  add('FLAC', a.canPlayType('audio/flac') || a.canPlayType('audio/mp4; codecs="flac"'));
+  add('Media Source', 'MediaSource' in window || 'ManagedMediaSource' in window);
+  add('Protected media API', 'requestMediaKeySystemAccess' in navigator);
+  add('Widevine AAC', await eme('com.widevine.alpha', 'audio/mp4; codecs="mp4a.40.2"'));
+  add('Widevine FLAC', await eme('com.widevine.alpha', 'audio/mp4; codecs="flac"'));
+  add('PlayReady', await eme('com.microsoft.playready', 'audio/mp4; codecs="mp4a.40.2"'));
+  add('FairPlay', await eme('com.apple.fps', 'audio/mp4; codecs="mp4a.40.2"'));
+  add('Media Session', 'mediaSession' in navigator);
+  add('Web Audio', 'AudioContext' in window || 'webkitAudioContext' in window);
+  let store = false; try { localStorage.setItem('tg.probe', '1'); store = localStorage.getItem('tg.probe') === '1'; localStorage.removeItem('tg.probe'); } catch {}
+  add('Storage', store);
+  add('Web Crypto', !!(window.crypto && crypto.subtle));
+  let net = false; try { const r = await fetch('https://openapi.tidal.com/v2/', { method: 'GET' }); net = r.status > 0; } catch {}
+  add('Reaches TIDAL', net);
+  add('Tone played', false);
+  add('Spare', false);
+  render();
+})();
+document.getElementById('tone').addEventListener('click', async () => {
+  try {
+    const C = window.AudioContext || window.webkitAudioContext; const c = new C(); await c.resume();
+    const o = c.createOscillator(), g = c.createGain(); o.frequency.value = 660; g.gain.value = 0.15; o.connect(g).connect(c.destination);
+    o.start(); o.stop(c.currentTime + 0.8);
+    const i = R.findIndex(r => r[0] === 'Tone played'); if (i >= 0) R[i][1] = c.state === 'running';
+    document.getElementById('sum').textContent = 'Read the big code to Claude, and say if you heard the tone.';
+  } catch { document.getElementById('sum').textContent = 'The test sound could not start.'; }
+  render();
+});
+</script>
+</body>
+</html>
