@@ -110,6 +110,49 @@ const TidalAPI = (() => {
     return true;
   }
 
+  // Sign-in finished on a phone (see tidal-handoff.js). The verifier is made here and stays in this
+  // page's memory; only its challenge and the state are handed out.
+  let offered = null; // { state, verifier, at }
+
+  async function offerLogin() {
+    if (!configured() || !(window.crypto && crypto.subtle && crypto.getRandomValues)) return null;
+    const verifier = randomToken(48);
+    const state = randomToken(18);
+    let challenge;
+    try {
+      challenge = b64url(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier))));
+    } catch (e) { return null; }
+    offered = { state, verifier, at: Date.now() };
+    return { t: 'offer', ch: challenge, st: state, ru: redirectUri(), sc: scopes() };
+  }
+
+  // TIDAL's one-time answer, brought over from the phone. Resolves 'ok', 'failed' or 'stale'.
+  async function redeemOffer(code, state) {
+    const mine = offered;
+    if (!mine || mine.state !== state || Date.now() - mine.at > PKCE_MAX_AGE) return 'stale';
+    if (typeof code !== 'string' || !/^[\x21-\x7e]{1,2048}$/.test(code)) return 'failed';
+    offered = null; // an answer is used once
+    return exchange(code, mine.verifier);
+  }
+
+  async function exchange(code, verifier) {
+    try {
+      const res = await timedFetch(TOKEN, {
+        method: 'POST',
+        headers: { 'content-type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+          grant_type: 'authorization_code',
+          client_id: clientId(),
+          code,
+          redirect_uri: redirectUri(),
+          code_verifier: verifier,
+        }).toString(),
+      });
+      if (!res.ok) return 'failed';
+      return saveTokens(await res.json(), null) ? 'ok' : 'failed';
+    } catch (e) { return 'failed'; }
+  }
+
   function hasLoginAnswer() {
     const q = new URLSearchParams(location.search);
     return q.has('code') || q.has('error');
@@ -132,21 +175,7 @@ const TidalAPI = (() => {
     if (denied) return 'denied';
     if (!configured() || !code || !pkce || !pkce.verifier || pkce.state !== state
         || Date.now() - (pkce.at || 0) > PKCE_MAX_AGE) return 'failed';
-    try {
-      const res = await timedFetch(TOKEN, {
-        method: 'POST',
-        headers: { 'content-type': 'application/x-www-form-urlencoded' },
-        body: new URLSearchParams({
-          grant_type: 'authorization_code',
-          client_id: clientId(),
-          code,
-          redirect_uri: redirectUri(),
-          code_verifier: pkce.verifier,
-        }).toString(),
-      });
-      if (!res.ok) return 'failed';
-      return saveTokens(await res.json(), null) ? 'ok' : 'failed';
-    } catch (e) { return 'failed'; }
+    return exchange(code, pkce.verifier);
   }
 
   function saveTokens(t, previous) {
@@ -567,7 +596,7 @@ const TidalAPI = (() => {
 
   return {
     configured, canSignIn, signedIn, scopes, redirectUri,
-    beginLogin, hasLoginAnswer, finishLogin, signOut,
+    beginLogin, hasLoginAnswer, finishLogin, signOut, offerLogin, redeemOffer,
     page, details, playable, whoAmI,
     set onAuthLost(fn) { onAuthLost = fn; },
   };

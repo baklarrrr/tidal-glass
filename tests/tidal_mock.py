@@ -344,6 +344,7 @@ def sign_in(page, base):
     """From the signed-out first screen to the Library, through the mocked TIDAL sign-in."""
     page.goto(base)
     page.locator("#signIn").wait_for()
-    page.keyboard.press("Enter")
+    page.keyboard.press("Enter")           # Sign in: the code for a phone
+    page.locator("#signInHere").click()    # this test browser can sign in on the spot
     page.locator("#items button").first.wait_for()
     time.sleep(0.05)

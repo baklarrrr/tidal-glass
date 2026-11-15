@@ -390,3 +390,10 @@ body.tidal #now .device-switch, body.tidal #now .row.small, body.tidal #now .nam
 #now.phone .tplay { order: 1; margin-block-start: 14px; }
 #now.phone .row.main { order: 2; }
 #now.phone .tidalfoot { order: 3; }
+
+/* ---- signing in from a phone: the code is the one thing to read ---------------------------------- */
+#pairCode, #signInHere { display: none; }
+body.pairing #pairCode { display: block; margin: 6px 0 2px; font: 700 64px/1.05 ui-monospace, "SF Mono", Menlo, Consolas, monospace; letter-spacing: 0.08em; color: #fff; white-space: nowrap; }
+body.pairing #signInHere { display: inline-flex; }
+body.pairing #signIn, body.pairing #setupOption, body.pairing #audioRoute, body.pairing #openTidal, body.pairing .hero { display: none; }
+body.pairing #setupNeed { font-size: 22px; line-height: 1.3; }

@@ -25,6 +25,25 @@ SCOPES = "user.read collection.read playlists.read search.read playback"
 results = []
 
 
+# Stands in for the public message brokers: pages of one browser context reach each other, nothing leaves the machine.
+FAKE_BROKERS = """(() => {
+  window.__said = [];
+  const bus = new BroadcastChannel('fake-brokers');
+  window.mqtt = { connect() {
+    const subs = new Set(); const handlers = {};
+    const c = { connected: false,
+      on(name, fn) { (handlers[name] = handlers[name] || []).push(fn); return c; },
+      subscribe(t) { subs.add(t); },
+      publish(t, body) { window.__said.push(String(body)); bus.postMessage({ t, body: String(body) }); },
+      end() { c.connected = false; bus.removeEventListener('message', hear); } };
+    const hear = (e) => { if (c.connected && subs.has(e.data.t)) for (const fn of handlers.message || []) fn(e.data.t, e.data.body); };
+    bus.addEventListener('message', hear);
+    setTimeout(() => { c.connected = true; for (const fn of handlers.connect || []) fn(); }, 30);
+    return c;
+  } };
+})();"""
+
+
 def check(label, fn):
     try:
         fn()
@@ -123,6 +142,7 @@ def main():
 
                     def round_trip():
                         page.keyboard.press("Enter")
+                        page.locator("#signInHere").click()
                         page.locator('#items button[data-id="menu:tracks"]').wait_for()
                         q = mock.logins[-1]
                         assert q["scope"] == SCOPES and q["redirect_uri"] == base and q["client_id"] == CLIENT_ID
@@ -346,6 +366,7 @@ def main():
                         assert not page.locator("#list").is_visible() and focused(page) == "signIn"
                         mock.refresh_ok = True
                         key(page, "Enter")
+                        page.locator("#signInHere").click()
                         page.wait_for_function("!document.getElementById('list').hidden && document.getElementById('listTitle').textContent === 'Deep focus for long edits and renders'")
                         assert text(page, "#crumb") == "Library › Playlists"
                         wait_rows(page, 20)
@@ -472,6 +493,53 @@ def main():
                         wait_rows(page, 5)
                     check("an answer that is not JSON: one calm line, then the list once TIDAL answers properly", garbage)
 
+                # ---- signing in from a phone: the glasses show a code, the phone logs in --------------------------
+                mock = MockTidal(base)
+                with new_context(mock) as ctx:
+                    ctx.add_init_script(FAKE_BROKERS)
+                    ctx.route("**/vendor/mqtt.min.js", lambda r: r.fulfill(content_type="text/javascript", body="/* the test's own brokers */"))
+                    glasses = ctx.new_page()
+                    glasses.goto(base)
+                    glasses.locator("#signIn").wait_for()
+
+                    def code_screen():
+                        glasses.keyboard.press("Enter")
+                        glasses.locator("#pairCode").wait_for()
+                        shown = text(glasses, "#pairCode")
+                        assert len(shown) == 9 and shown[4] == " " and shown.replace(" ", "").isalnum(), shown
+                        assert "link" in text(glasses, "#setupNeed") and "enter this code" in text(glasses, "#setupNeed")
+                        assert not glasses.locator("#signIn").is_visible() and glasses.locator("#signInHere").is_visible()
+                        fits = glasses.evaluate("document.documentElement.scrollHeight <= 600 && document.documentElement.scrollWidth <= 600 && [...document.querySelectorAll('#setup > *')].filter(e => e.offsetParent).every(e => { const r = e.getBoundingClientRect(); return r.left >= 0 && r.right <= 600 && r.bottom <= 600; })")
+                        assert fits
+                        assert not mock.logins and not mock.token_posts
+                    check("Sign in on the glasses shows one large code and where to enter it, inside 600 by 600; TIDAL is not asked anything yet", code_screen)
+
+                    phone = ctx.new_page()
+
+                    def wrong_code():
+                        phone.goto(base + "link/")
+                        phone.fill("#code", "nope")
+                        phone.keyboard.press("Enter")
+                        phone.wait_for_function("document.getElementById('status').textContent.includes('8 letters')")
+                        assert not mock.logins
+                    check("the phone page refuses something that is not a code and goes nowhere", wrong_code)
+
+                    def phone_signs_in():
+                        typed = text(glasses, "#pairCode").lower().replace(" ", "-")
+                        phone.fill("#code", typed)
+                        phone.keyboard.press("Enter")
+                        phone.wait_for_function("document.getElementById('title').textContent === 'Done'", timeout=15000)
+                        glasses.locator('#items button[data-id="menu:tracks"]').wait_for()
+                        q = mock.logins[-1]
+                        assert q["scope"] == SCOPES and q["redirect_uri"] == base and q["client_id"] == CLIENT_ID and len(q["code_challenge"]) == 43
+                        assert len(mock.token_posts) == 1 and "client_secret" not in mock.token_posts[0]
+                        assert glasses.evaluate("!!JSON.parse(localStorage.getItem('tg.tidal.auth.v1')).a")
+                        assert phone.evaluate("location.search === '' && localStorage.getItem('tg.tidal.handoff.v1') === null")
+                        said = phone.evaluate("window.__said.concat([])") + glasses.evaluate("window.__said.concat([])")
+                        assert not any("access-" in m or "refresh-" in m or "verifier" in m for m in said), said
+                        assert "Your glasses are signed in" in text(phone, "#status")
+                    check("code typed on the phone, TIDAL login there, and the glasses sign in by themselves; only the one-time answer crosses over, never a token", phone_signs_in)
+
                 # ---- a service that only understands the older request wording -------------------------------------
                 mock = MockTidal(base)
                 mock.legacy = True
@@ -571,11 +639,11 @@ def main():
                         sign_in(page, base)
                         open_menu(page, "tracks")
                         wait_rows(page, 20)
-                        cached = page.evaluate("caches.open('tidal-glass-v27').then(c => c.keys()).then(ks => ks.map(k => k.url))")
+                        cached = page.evaluate("caches.open('tidal-glass-v28').then(c => c.keys()).then(ks => ks.map(k => k.url))")
                         for name in ("tidal-api.js", "tidal-library.js", "tidal-config.js", "app.js", "style.css"):
                             assert any(u.endswith("/" + name) for u in cached), name
                         assert not [u for u in cached if "code=" in u or "state=" in u], "a sign-in answer was kept in the cache"
-                        assert page.evaluate("caches.keys()") == ["tidal-glass-v27"]
+                        assert page.evaluate("caches.keys()") == ["tidal-glass-v28"]
                         ctx.set_offline(True)
                         mock.offline = True
                         page.reload(wait_until="domcontentloaded")
@@ -583,7 +651,7 @@ def main():
                         key(page, "Enter")
                         wait_rows(page, 20)
                         page.wait_for_function("document.getElementById('listNote').textContent.startsWith('Saved list from')", timeout=15000)
-                    check("with the service worker (cache v27, new files in its shell): the app and its saved menu open with no network at all", offline_shell)
+                    check("with the service worker (cache v28, new files in its shell): the app and its saved menu open with no network at all", offline_shell)
                     ctx.close()
 
             check("no page errors in any of the above", lambda: (_ for _ in ()).throw(AssertionError(errors[:3])) if errors else None)
