@@ -639,11 +639,11 @@ def main():
                         sign_in(page, base)
                         open_menu(page, "tracks")
                         wait_rows(page, 20)
-                        cached = page.evaluate("caches.open('tidal-glass-v29').then(c => c.keys()).then(ks => ks.map(k => k.url))")
+                        cached = page.evaluate("caches.open('tidal-glass-v30').then(c => c.keys()).then(ks => ks.map(k => k.url))")
                         for name in ("tidal-api.js", "tidal-library.js", "tidal-config.js", "app.js", "style.css"):
                             assert any(u.endswith("/" + name) for u in cached), name
                         assert not [u for u in cached if "code=" in u or "state=" in u], "a sign-in answer was kept in the cache"
-                        assert page.evaluate("caches.keys()") == ["tidal-glass-v29"]
+                        assert page.evaluate("caches.keys()") == ["tidal-glass-v30"]
                         ctx.set_offline(True)
                         mock.offline = True
                         page.reload(wait_until="domcontentloaded")
@@ -651,7 +651,7 @@ def main():
                         key(page, "Enter")
                         wait_rows(page, 20)
                         page.wait_for_function("document.getElementById('listNote').textContent.startsWith('Saved list from')", timeout=15000)
-                    check("with the service worker (cache v29, new files in its shell): the app and its saved menu open with no network at all", offline_shell)
+                    check("with the service worker (cache v30, new files in its shell): the app and its saved menu open with no network at all", offline_shell)
                     ctx.close()
 
             check("no page errors in any of the above", lambda: (_ for _ in ()).throw(AssertionError(errors[:3])) if errors else None)

@@ -619,8 +619,17 @@ const TidalAPI = (() => {
     } catch (e) {
       if (e.kind !== 'missing' && e.kind !== 'server') throw e;
     }
-    if (sources.length) return { mode: sources[0].full ? 'full' : 'preview', sources, presentation, why: '' };
-    return { mode: 'phone', sources, presentation, why: protectedStream ? 'drm' : (stream ? 'stream' : '') };
+    // What TIDAL answered and what this browser can do, in a few letters: shown small when a song
+    // will not start, so the reason can be read off the display. No address, token or name in it.
+    let facts = '';
+    try {
+      const kind = /\.m3u8(\?|$)/.test(stream) ? 'hls' : (/\.mpd(\?|$)/.test(stream) ? 'dash' : (stream ? 'other' : 'none'));
+      facts = [presentation ? presentation[0] : '-', kind, 'drm' + (protectedStream ? 1 : 0), 'file' + (sources.some((x) => x.url !== stream) ? 1 : 0),
+        'nat' + (nativeHls() ? 1 : 0), 'mse' + (window.MediaSource || window.ManagedMediaSource ? 1 : 0),
+        'eme' + (navigator.requestMediaKeySystemAccess ? 1 : 0)].join(' ');
+    } catch (e) { /* facts are a convenience */ }
+    if (sources.length) return { mode: sources[0].full ? 'full' : 'preview', sources, presentation, why: '', facts };
+    return { mode: 'phone', sources, presentation, why: protectedStream ? 'drm' : (stream ? 'stream' : ''), facts };
   }
 
   return {

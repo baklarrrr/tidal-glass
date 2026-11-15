@@ -651,6 +651,8 @@ const TidalLibrary = (() => {
     if (playFailed === row.id && cap.mode !== 'checking') {
       state = 'This song could not start here';
     }
+    // The few letters that say why (see playable() in tidal-api.js), for a song that plays from the phone only.
+    if (cap.mode === 'phone' && cap.facts) hint = (hint ? hint + ' ' : '') + '[' + cap.facts + ']';
     $('stateText').textContent = state;
     $('stateText').parentElement.classList.toggle('warn', cap.mode === 'error');
     $('dot').classList.toggle('live', on);
@@ -734,7 +736,9 @@ const TidalLibrary = (() => {
     playFailed = id;
     playing = null;
     // What TIDAL handed out did not play in this browser: say where it does play.
-    caps.set(id, { mode: 'phone', sources: [], presentation: '', why: 'unplayable' });
+    let code = '';
+    try { code = audio && audio.error ? ' e' + audio.error.code : ' e-'; } catch (e) { /* no code */ }
+    caps.set(id, { mode: 'phone', sources: [], presentation: '', why: 'unplayable', facts: (cap.facts || '') + code });
     drawPlay();
     focusTrack();
   }
