@@ -70,6 +70,8 @@ def context(browser):
     def guard(ws):
         ws.close()
     ctx.route_web_socket("**/*", guard)
+    # These checks are about the app before any TIDAL sign-in is set up; tidal_test.py covers the signed-in app.
+    ctx.route("**/tidal-config.js", lambda r: r.fulfill(content_type="text/javascript", body="window.TIDAL_CLIENT_ID = '';"))
     return ctx
 
 

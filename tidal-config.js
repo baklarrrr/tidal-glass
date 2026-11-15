@@ -10,7 +10,7 @@
 // and switch on the scopes listed in TIDAL_SCOPES below.
 //
 // While this stays empty the app opens on a plain first screen and nothing contacts TIDAL.
-window.TIDAL_CLIENT_ID = '';
+window.TIDAL_CLIENT_ID = 'r8xd7hyy4LIq1r8P';
 
 // What the app asks TIDAL for at sign-in: who you are, your collection, your playlists, search,
 // and playback. Read only; nothing is added, removed or changed in the TIDAL account.
