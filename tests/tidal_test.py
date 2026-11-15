@@ -472,6 +472,27 @@ def main():
                         wait_rows(page, 5)
                     check("an answer that is not JSON: one calm line, then the list once TIDAL answers properly", garbage)
 
+                # ---- a service that only understands the older request wording -------------------------------------
+                mock = MockTidal(base)
+                mock.legacy = True
+                with new_context(mock) as ctx:
+                    page = ctx.new_page()
+
+                    def older_wording():
+                        sign_in(page, base)
+                        open_menu(page, "tracks")
+                        wait_rows(page, 20)
+                        asked = [path for _, path, _ in mock.log if path.startswith("/userCollectionTracks")]
+                        assert asked[0].startswith("/userCollectionTracks/me/") and "/me/" not in asked[-1], asked
+                        key(page, "Escape")
+                        open_menu(page, "search")
+                        page.keyboard.type("all")
+                        key(page, "Enter")
+                        page.wait_for_function("document.querySelectorAll('#items button.art').length >= 2", timeout=10000)
+                        searched = [path for _, path, _ in mock.log if path.startswith("/searchResults")]
+                        assert searched[0] == "/searchResults" and searched[-1].endswith("/relationships/topHits"), searched
+                    check("TIDAL refusing the documented wording: the list and the search ask again the older way and still show", older_wording)
+
                 # ---- storage switched off --------------------------------------------------------------------------
                 mock = MockTidal(base)
                 with new_context(mock) as ctx:
@@ -550,11 +571,11 @@ def main():
                         sign_in(page, base)
                         open_menu(page, "tracks")
                         wait_rows(page, 20)
-                        cached = page.evaluate("caches.open('tidal-glass-v26').then(c => c.keys()).then(ks => ks.map(k => k.url))")
+                        cached = page.evaluate("caches.open('tidal-glass-v27').then(c => c.keys()).then(ks => ks.map(k => k.url))")
                         for name in ("tidal-api.js", "tidal-library.js", "tidal-config.js", "app.js", "style.css"):
                             assert any(u.endswith("/" + name) for u in cached), name
                         assert not [u for u in cached if "code=" in u or "state=" in u], "a sign-in answer was kept in the cache"
-                        assert page.evaluate("caches.keys()") == ["tidal-glass-v26"]
+                        assert page.evaluate("caches.keys()") == ["tidal-glass-v27"]
                         ctx.set_offline(True)
                         mock.offline = True
                         page.reload(wait_until="domcontentloaded")
@@ -562,7 +583,7 @@ def main():
                         key(page, "Enter")
                         wait_rows(page, 20)
                         page.wait_for_function("document.getElementById('listNote').textContent.startsWith('Saved list from')", timeout=15000)
-                    check("with the service worker (cache v26, new files in its shell): the app and its saved menu open with no network at all", offline_shell)
+                    check("with the service worker (cache v27, new files in its shell): the app and its saved menu open with no network at all", offline_shell)
                     ctx.close()
 
             check("no page errors in any of the above", lambda: (_ for _ in ()).throw(AssertionError(errors[:3])) if errors else None)
