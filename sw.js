@@ -4,8 +4,8 @@
 // Network first, so an update shows up on the very next launch; the copy is only the fallback.
 // Only this site's own files are handled; the phone link (MQTT over WebSocket) and artwork always go
 // to the network.
-const CACHE = 'tidal-glass-v24';
-const SHELL = ['./', 'index.html', 'style.css', 'app.js', 'vendor/mqtt.min.js', 'icon.svg', 'icon-mono.svg',
+const CACHE = 'tidal-glass-v25';
+const SHELL = ['./', 'index.html', 'style.css', 'app.js', 'tidal-config.js', 'tidal-api.js', 'tidal-library.js', 'vendor/mqtt.min.js', 'icon.svg', 'icon-mono.svg',
   'icon-192.png', 'icon-512.png', 'manifest.webmanifest', '.well-known/meta-wearables-manifest.json',
   'sound/', 'sound/index.html', 'sound/icon.svg', 'sound/icon-mono.svg', 'sound/icon-192.png',
   'sound/icon-512.png', 'sound/manifest.webmanifest', 'sound/.well-known/meta-wearables-manifest.json'];
@@ -58,7 +58,8 @@ self.addEventListener('fetch', (event) => {
         fetch(event.request.url, { cache: 'no-cache', credentials: 'same-origin' }),
         new Promise((_, reject) => setTimeout(() => reject(new Error('slow network')), 3000)),
       ]);
-      if (response.ok) cache.put(event.request, response.clone());
+      // A sign-in answer (?code=…) is used once and must never be kept: the page is cached without it.
+      if (response.ok && !url.searchParams.has('code') && !url.searchParams.has('error')) cache.put(event.request, response.clone());
       return response;
     } catch (e) {
       return (await cache.match(event.request, { ignoreSearch: true })) || Response.error();
