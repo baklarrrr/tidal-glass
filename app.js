@@ -171,7 +171,14 @@ function leaveAndroid() {
 }
 
 // The web app cannot inspect the paired phone or select an iOS Bluetooth output.
+// TIDAL Glass puts the signed-in TIDAL library here (tidal-library.js); Sound Lab, and TIDAL Glass
+// before sign-in, show the card.
 function showIphone(message = '') {
+  if (APP_MODE === 'tidal' && typeof TidalLibrary !== 'undefined') TidalLibrary.show(message, showCard);
+  else showCard(message);
+}
+
+function showCard(message = '') {
   for (const el of document.querySelectorAll('main > section')) el.hidden = el.id !== 'setup';
   document.body.classList.remove('calm');
   $('setupHint').textContent = message;
@@ -218,6 +225,7 @@ async function controlAndroid(event) {
   androidVisit = visitId;
   if (!isAndroidVisit()) { returnToIphone(); return; }
   topic = pairing.t;
+  if (typeof TidalLibrary !== 'undefined') TidalLibrary.stop();
   $('setup').hidden = true;
   if (!wired) {
     wire();
@@ -1199,6 +1207,7 @@ function nudgeVolume(delta) {
 
 // Every destination is a history entry so the glasses' Back steps out one level at a time.
 function go(next) {
+  if (!isAndroidVisit()) return;
   if (depth < HISTORY_LIMIT) {
     history.pushState(next, '');
     depth++;
@@ -1338,11 +1347,13 @@ function openFolder(it) {
 }
 
 function openLibraryRoot() {
+  if (!isAndroidVisit()) return;
   history.replaceState({ ...view, focus: 'library' }, '');
   go({ screen: 'lib', id: null, title: 'Library', page: 0, crumbs: [], focus: null });
 }
 
 function openQueue() {
+  if (!isAndroidVisit()) return;
   history.replaceState({ ...view, focus: 'queue' }, '');
   go({ screen: 'queue' });
 }
@@ -1360,7 +1371,8 @@ function leaveToNow() {
 
 function onPopState(e) {
   depth = Math.max(0, depth - 1);
-  render(e.state || ROOT);
+  // An entry the TIDAL library left behind is not one of these screens: show the first one.
+  render(e.state && e.state.screen ? e.state : ROOT);
 }
 
 // ---- swiping through the scrolling lists -------------------------------------------------------
@@ -1375,8 +1387,10 @@ function onPopState(e) {
 
 function listOf(el) {
   if (!el || !el.closest) return null;
-  if (el.closest('#items') || el.id === 'more') {
-    return { box: $('items'), rows: () => [...$('items').querySelectorAll('button')], below: () => (!$('more').hidden ? $('more') : null), above: null };
+  if (el.closest('#items') || el.id === 'more' || el.closest('.listtop')) {
+    // The TIDAL library has a search box and an "Open in TIDAL" link above its rows.
+    const above = () => [...document.querySelectorAll('.listtop input, .listtop a')].reverse().find((x) => x.offsetParent) || null;
+    return { box: $('items'), rows: () => [...$('items').querySelectorAll('button')], below: () => (!$('more').hidden ? $('more') : null), above };
   }
   if (el.closest('#sndRows') || el.closest('.sndtools')) {
     return { box: $('sndRows'), rows: () => [...$('sndRows').querySelectorAll('.srow')], below: null, above: () => $('sndPower') };
@@ -1678,6 +1692,7 @@ function stepPreset(dir) {
 }
 
 function openSub(screen, from) {
+  if (!isAndroidVisit()) return;
   history.replaceState({ ...view, focus: from }, '');
   go({ screen });
 }
@@ -2070,6 +2085,25 @@ function registerServiceWorker() {
 
 // ---- wiring ------------------------------------------------------------------------------
 
+// Shared by the Android player and the TIDAL library; attached once, by whichever opens first.
+let listSwipesWired = false;
+function wireListSwipes() {
+  if (listSwipesWired) return;
+  listSwipesWired = true;
+  // Up and down in the scrolling lists: let the platform move focus, then repair (see repairSwipe).
+  document.addEventListener('keydown', (e) => {
+    if ((e.key !== 'ArrowUp' && e.key !== 'ArrowDown') || e.defaultPrevented) return;
+    const from = e.target;
+    if (!listOf(from)) return;
+    const dir = e.key === 'ArrowDown' ? 1 : -1;
+    if (atListEnd(from, dir)) {
+      e.preventDefault();
+      return;
+    }
+    setTimeout(() => repairSwipe(from, dir), 0);
+  });
+}
+
 function wire() {
   document.querySelectorAll('.device-switch').forEach(button => button.addEventListener('click', returnToIphone));
   // Any swipe or pinch wakes the page from calm before anything else handles it.
@@ -2088,7 +2122,7 @@ function wire() {
   $('soundBtn').addEventListener('click', () => openSub('sound', 'soundBtn'));
   buildSound();
   $('more').addEventListener('click', () => {
-    if (view.screen === 'lib') go({ ...view, page: (view.page || 0) + 1, focus: null });
+    if (isAndroidVisit() && view.screen === 'lib') go({ ...view, page: (view.page || 0) + 1, focus: null });
   });
 
   $('seek').addEventListener('keydown', (e) => {
@@ -2099,21 +2133,11 @@ function wire() {
     }
   });
 
-  // Up and down in the scrolling lists: let the platform move focus, then repair (see repairSwipe).
-  document.addEventListener('keydown', (e) => {
-    if ((e.key !== 'ArrowUp' && e.key !== 'ArrowDown') || e.defaultPrevented) return;
-    const from = e.target;
-    if (!listOf(from)) return;
-    const dir = e.key === 'ArrowDown' ? 1 : -1;
-    if (atListEnd(from, dir)) {
-      e.preventDefault();
-      return;
-    }
-    setTimeout(() => repairSwipe(from, dir), 0);
-  });
+  wireListSwipes();
 
   // Lists are one column, so sideways swipes are free: left steps back, right opens a folder.
   $('list').addEventListener('keydown', (e) => {
+    if (!isAndroidVisit()) return;
     const b = e.target.closest && e.target.closest('#items button');
     if (e.key === 'ArrowLeft') {
       e.preventDefault();
@@ -2125,6 +2149,7 @@ function wire() {
   });
 
   document.addEventListener('focusin', (e) => {
+    if (!isAndroidVisit()) return;
     if (view.screen === 'now') showTip(e.target);
     else if (view.screen === 'sound' && snd) renderSound();
   });
@@ -2140,7 +2165,7 @@ function wire() {
     sayHello();
   });
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && view.screen !== ROOT.screen) { e.preventDefault(); history.back(); }
+    if (e.key === 'Escape' && isAndroidVisit() && view.screen !== ROOT.screen) { e.preventDefault(); history.back(); }
   });
 
 }

@@ -57,11 +57,22 @@
         <button id="toggle" class="round primary" aria-label="Play">
           <svg id="playIcon" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.4v13.2a.9.9 0 0 0 1.4.8l10.2-6.6a.9.9 0 0 0 0-1.6L9.4 4.6A.9.9 0 0 0 8 5.4z"/></svg>
           <svg id="pauseIcon" viewBox="0 0 24 24" aria-hidden="true" hidden><rect x="6" y="5" width="4.2" height="14" rx="1.2"/><rect x="13.8" y="5" width="4.2" height="14" rx="1.2"/></svg>
+          <span id="toggleLabel" hidden></span>
         </button>
         <button id="next" class="round" aria-label="Next">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15.8 5H18v14h-2.2zM5 5.6v12.8a.8.8 0 0 0 1.2.7l8.3-6.4a.8.8 0 0 0 0-1.4L6.2 4.9a.8.8 0 0 0-1.2.7z"/></svg>
         </button>
       </div>
+
+      <!-- TIDAL library (iPhone): what Play does for this song, said in plain words, and the way back to TIDAL. -->
+      <div id="tplay" class="tplay" hidden>
+        <p id="tplayNote" class="tnote" role="status"></p>
+        <p id="tplayHint" class="thint"></p>
+      </div>
+      <footer id="nowTidal" class="tidalfoot" hidden>
+        <svg class="tidal-logo" viewBox="0 0 48 32" aria-hidden="true"><path d="M8 0l8 8-8 8-8-8zM24 0l8 8-8 8-8-8zM40 0l8 8-8 8-8-8zM24 16l8 8-8 8-8-8z"/></svg>
+        <a id="nowTidalLink" class="tidal-link" href="https://tidal.com/" target="_blank" rel="noopener" referrerpolicy="no-referrer">Open in TIDAL</a>
+      </footer>
 
       <div class="row small">
         <button id="like" class="round" aria-label="Add to My Collection" aria-pressed="false">
@@ -97,7 +108,14 @@
         <p id="crumb" class="crumb"></p>
         <h2 id="listTitle" tabindex="-1">Library</h2>
       </header>
-      <p id="listNote" class="note"></p>
+      <a id="listTidal" class="tidal-link listtop" href="https://tidal.com/" target="_blank" rel="noopener" referrerpolicy="no-referrer" hidden>
+        <svg class="tidal-logo" viewBox="0 0 48 32" aria-hidden="true"><path d="M8 0l8 8-8 8-8-8zM24 0l8 8-8 8-8-8zM40 0l8 8-8 8-8-8zM24 16l8 8-8 8-8-8z"/></svg><span>Open in TIDAL</span>
+      </a>
+      <div id="searchRow" class="listtop searchrow" hidden>
+        <input id="searchBox" type="search" enterkeyhint="search" autocomplete="off" autocapitalize="off" spellcheck="false"
+               maxlength="80" placeholder="Song, album or artist" aria-label="Search TIDAL">
+      </div>
+      <p id="listNote" class="note" role="status"></p>
       <ol id="items" tabindex="-1"></ol>
       <div class="row small listnav">
         <button id="more" class="pill-btn" hidden><span>More</span>
@@ -165,13 +183,19 @@
     <section id="setup" class="screen center" aria-labelledby="setupTitle">
       <svg class="hero" viewBox="0 0 64 64" aria-hidden="true"><use href="icon-mono.svg#glyph"/></svg>
       <h1 id="setupTitle" tabindex="-1">TIDAL on iPhone</h1>
+      <p id="setupNeed" class="need" hidden></p>
+      <button id="signIn" class="pill-btn signin" type="button" hidden>Sign in to TIDAL</button>
       <p id="setupOption" class="artist">Play a track in TIDAL on your iPhone. With the display asleep, tap the right temple to pause or resume.</p>
       <a id="openTidal" href="https://tidal.com/my-collection" referrerpolicy="no-referrer" hidden>Open my TIDAL library</a>
       <p id="audioRoute">Sound coming from your phone? In TIDAL’s Now Playing, tap the speaker → AirPlay &amp; Bluetooth → your glasses.</p>
       <p id="setupHint" class="album" role="status" hidden></p>
+      <button id="signOut" class="android-option" type="button" hidden>Sign out of TIDAL</button>
       <button id="useAndroid" class="android-option" type="button" hidden>Control paired Android</button>
     </section>
   </main>
+  <script src="tidal-config.js"></script>
+  <script src="tidal-api.js"></script>
+  <script src="tidal-library.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
