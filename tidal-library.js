@@ -596,7 +596,11 @@ const TidalLibrary = (() => {
     const showing = () => active && top().s === 'track' && top().row.id === id;
     if (showing()) drawPlay();
     try {
-      caps.set(id, await TidalAPI.playable(id));
+      let cap = await TidalAPI.playable(id);
+      // TIDAL's own Player plays what a plain audio element cannot (whole songs, protected streams).
+      // It gets the first try; what the plain element could do stays as the fallback.
+      if (window.TidalPlayer && !officialFailed.has(id)) cap = { ...cap, official: true, mode: cap.presentation === 'PREVIEW' ? 'preview' : 'full' };
+      caps.set(id, cap);
       retryStep = 0;
     } catch (e) {
       if (e && e.kind === 'auth') { caps.delete(id); return; }
@@ -618,7 +622,7 @@ const TidalLibrary = (() => {
     if (!active || top().s !== 'track') return;
     const row = top().row;
     const cap = caps.get(row.id) || { mode: 'checking' };
-    const on = loaded() && audio && !audio.paused && !audio.ended;
+    const on = loaded() && audio && !audio.paused && !audio.ended && starting !== row.id;
     const canPlay = cap.mode === 'full' || cap.mode === 'preview';
     const toggle = $('toggle');
     const label = $('toggleLabel');
@@ -635,11 +639,12 @@ const TidalLibrary = (() => {
     let state = '';
     let note = '';
     let hint = '';
-    if (cap.mode === 'checking') state = 'Asking TIDAL what can play…';
+    if (starting === row.id) state = 'Starting…';
+    else if (cap.mode === 'checking') state = 'Asking TIDAL what can play…';
     else if (cap.mode === 'error') state = SAY[cap.kind] || SAY.server;
     else if (cap.mode === 'preview') {
       state = on ? 'Playing a preview' : (loaded() && audio.ended ? 'Preview finished' : 'Preview ready');
-      note = 'TIDAL lets other apps play previews only.';
+      note = cap.why ? 'TIDAL gave a preview (' + String(cap.why).toLowerCase().replace(/_/g, ' ') + ').' : 'TIDAL lets other apps play previews only.';
       hint = 'Full songs play from the TIDAL app on your phone.';
     } else if (cap.mode === 'full') {
       state = on ? 'Playing' : (loaded() && audio.currentTime > 0 && !audio.ended ? 'Paused' : 'Ready to play');
@@ -698,9 +703,10 @@ const TidalLibrary = (() => {
   // A browser that refuses to start sound without a press has not failed: the button stays.
   const startFailed = (id, url) => (err) => { if (err && err.name === 'NotAllowedError') drawPlay(); else if (!err || err.name !== 'AbortError') failPlay(id, url); };
 
+  let plainAudio = null;
   function player() {
-    if (audio) return audio;
-    audio = new Audio();
+    if (plainAudio) { audio = plainAudio; return audio; }
+    audio = plainAudio = new Audio();
     audio.preload = 'none';
     for (const ev of ['play', 'pause', 'playing', 'waiting', 'durationchange']) audio.addEventListener(ev, drawPlay);
     audio.addEventListener('timeupdate', drawBar);
@@ -743,7 +749,100 @@ const TidalLibrary = (() => {
     focusTrack();
   }
 
+  // ---- playing through TIDAL's own Player -----------------------------------------------------------------------
+  const officialFailed = new Set(); // songs the Player could not start this visit: they use the plain element
+  const bound = new WeakSet();
+  let starting = null;
+
+  function bindElement(el) {
+    if (!el || bound.has(el)) return;
+    bound.add(el);
+    for (const ev of ['play', 'pause', 'playing', 'waiting', 'durationchange', 'ended']) el.addEventListener(ev, drawPlay);
+    el.addEventListener('timeupdate', drawBar);
+  }
+
+  let playerWired = false;
+  function wirePlayer() {
+    if (playerWired || !window.TidalPlayer) return;
+    playerWired = true;
+    window.TidalPlayer.on('playback-state-change', () => { bindElement(window.TidalPlayer.element()); if (playing && playing.official) audio = window.TidalPlayer.element() || audio; drawPlay(); });
+    window.TidalPlayer.on('media-product-transition', (e) => {
+      // What TIDAL actually granted for this song: a whole song or a preview, said on the button.
+      const ctx = e && e.detail && e.detail.playbackContext;
+      if (!ctx || !playing || !playing.official) return;
+      const cap = caps.get(playing.id);
+      const mode = ctx.actualAssetPresentation === 'PREVIEW' ? 'preview' : 'full';
+      playing.mode = mode;
+      if (cap) caps.set(playing.id, { ...cap, mode, why: ctx.previewReason || '' });
+      drawPlay();
+    });
+    window.TidalPlayer.on('ended', (e) => {
+      if (!playing || !playing.official || !e || !e.detail || e.detail.reason !== 'completed') return;
+      drawPlay();
+      if (playing.mode === 'full' && loaded()) {
+        const n = neighbours().next;
+        if (n) { playNext = n.row.id; step(n); if ((caps.get(n.row.id) || {}).mode === 'full') pressPlay(); }
+      }
+    });
+  }
+
+  async function pressOfficial(row, cap) {
+    const P = window.TidalPlayer;
+    wirePlayer();
+    if (loaded() && playing.official) {
+      if (starting === row.id) return;
+      if (audio && !audio.paused && !audio.ended) P.pause();
+      else if (audio && audio.ended) startOfficial(row, cap);
+      else P.play().catch(() => {});
+      return;
+    }
+    startOfficial(row, cap);
+  }
+
+  async function startOfficial(row, cap) {
+    const P = window.TidalPlayer;
+    playFailed = null;
+    stopAudio();
+    playing = { id: row.id, mode: cap.mode, official: true, url: '' };
+    starting = row.id;
+    announce(row);
+    drawPlay();
+    try {
+      // A start that never answers is a failure too: the plain element takes over after 20 s.
+      const el = await Promise.race([P.start(row.id), new Promise((_, no) => setTimeout(() => no(new Error('timeout')), 20000))]);
+      if (!playing || playing.id !== row.id) return; // the listener moved on while it loaded
+      bindElement(el);
+      audio = el || audio;
+    } catch (err) {
+      if (!playing || playing.id !== row.id) return;
+      // A browser that wants a press before sound has not failed: the button stays.
+      if (err && err.name === 'NotAllowedError') return;
+      officialFailed.add(row.id);
+      const code = ' p:' + ((P.errorCode && P.errorCode()) || (err && (err.errorCode || err.name)) || '?');
+      playing = null;
+      const plain = cap.sources && cap.sources.length;
+      // Back to what the plain element can do, if TIDAL handed out anything it can open.
+      caps.set(row.id, plain ? { ...cap, official: false, mode: cap.sources[0].full ? 'full' : 'preview', facts: (cap.facts || '') + code }
+        : { mode: 'phone', sources: [], presentation: cap.presentation || '', why: 'unplayable', facts: (cap.facts || '') + code });
+      if (!plain) playFailed = row.id;
+      try { P.stop(); } catch (e) { /* idle already */ }
+      if (starting === row.id) starting = null;
+      // What the plain element can open starts by itself, so one press is still one press.
+      if (plain && active && top().s === 'track' && top().row.id === row.id) pressPlay();
+    } finally {
+      if (starting === row.id) starting = null;
+      drawPlay();
+      focusTrack();
+    }
+  }
+
   function stopAudio() {
+    if (playing && playing.official && window.TidalPlayer) {
+      try { window.TidalPlayer.stop(); } catch (e) { /* already idle */ }
+      playing = null;
+      audio = null;
+      return;
+    }
     if (!audio) return;
     try { audio.pause(); audio.removeAttribute('src'); audio.load(); } catch (e) { /* already idle */ }
     playing = null;
@@ -754,6 +853,8 @@ const TidalLibrary = (() => {
     const row = top().row;
     const cap = caps.get(row.id);
     if (!cap || (cap.mode !== 'full' && cap.mode !== 'preview')) return;
+    if (cap.official && window.TidalPlayer) { pressOfficial(row, cap); return; }
+    if (playing && playing.official) stopAudio(); // the Player lets go before the plain element starts
     const a = player();
     if (loaded()) {
       if (a.paused || a.ended) { if (a.ended) a.currentTime = 0; a.play().catch(startFailed(row.id, playing.url)); }
@@ -774,8 +875,9 @@ const TidalLibrary = (() => {
     try {
       navigator.mediaSession.metadata = new MediaMetadata({ title: row.ti, artist: row.su, album: row.al,
         artwork: row.artL ? [{ src: row.artL }] : [] });
-      navigator.mediaSession.setActionHandler('play', () => audio && audio.play().catch(() => {}));
-      navigator.mediaSession.setActionHandler('pause', () => audio && audio.pause());
+      const official = () => playing && playing.official && window.TidalPlayer;
+      navigator.mediaSession.setActionHandler('play', () => (official() ? window.TidalPlayer.play().catch(() => {}) : audio && audio.play().catch(() => {})));
+      navigator.mediaSession.setActionHandler('pause', () => (official() ? window.TidalPlayer.pause() : audio && audio.pause()));
     } catch (e) { /* optional */ }
   }
 
@@ -788,7 +890,9 @@ const TidalLibrary = (() => {
 
   function nudge(dir) {
     if (!loaded() || !audio || !Number.isFinite(audio.duration)) return;
-    audio.currentTime = Math.max(0, Math.min(audio.duration - 0.25, audio.currentTime + dir * 10));
+    const to = Math.max(0, Math.min(audio.duration - 0.25, audio.currentTime + dir * 10));
+    if (playing && playing.official && window.TidalPlayer) window.TidalPlayer.seek(to);
+    else audio.currentTime = to;
     drawBar();
   }
 
