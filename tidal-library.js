@@ -93,6 +93,9 @@ const TidalLibrary = (() => {
     showCard = card;
     wireCard();
     if (finishing) return;
+    // A phone that TIDAL sent back with an answer for the glasses: this visit is on its way to link/.
+    if (window.__tgHandoffReturn) { drawCard('Finishing on your glasses…', false, true); return; }
+    if (pairing) return; // the code stays on screen while the phone is at work
     if (TidalAPI.configured() && TidalAPI.hasLoginAnswer()) {
       finishing = true;
       drawCard('Signing you in…', false, true);
@@ -116,6 +119,7 @@ const TidalLibrary = (() => {
   // What happened (a cancelled sign-in, a sign-in TIDAL wants again) is said once, in the line under
   // the title, in place of the usual one; `busy` hides the button while an answer is being exchanged.
   function drawCard(message, help = false, busy = false) {
+    endPairing();
     document.body.classList.remove('tidal');
     if (showCard) showCard('');
     const configured = TidalAPI.configured();
@@ -130,7 +134,84 @@ const TidalLibrary = (() => {
     if (!$('signIn').hidden) $('signIn').focus({ preventScroll: true });
   }
 
+  // ---- signing in from a phone ---------------------------------------------------------------------------
+  // The glasses show a code; the phone opens link/, takes the code and does the TIDAL sign-in. The
+  // phone then hands TIDAL's one-time answer back, and this page alone can turn it into a sign-in.
+  const LINK_ADDRESS = (location.host + location.pathname.replace(/[^/]*$/, '') + 'link').replace(/^www\./, '');
+  let pairing = null; // { room, timers: [], done }
+
+  function endPairing() {
+    document.body.classList.remove('pairing');
+    $('pairCode').textContent = '';
+    $('pairCode').hidden = true;
+    $('signInHere').hidden = true;
+    if (!pairing) return;
+    const p = pairing;
+    pairing = null;
+    for (const t of p.timers) clearTimeout(t), clearInterval(t);
+    if (p.room) p.room.close();
+  }
+
+  function pairingNote(text) {
+    $('setupHint').textContent = text;
+    $('setupHint').hidden = !text;
+  }
+
+  async function beginPairing() {
+    if (pairing || typeof TidalHandoff === 'undefined') return false;
+    const offer = await TidalAPI.offerLogin();
+    if (!offer) return false;
+    const code = TidalHandoff.newCode();
+    const mine = { room: null, timers: [], done: false };
+    pairing = mine;
+    document.body.classList.add('pairing');
+    $('setupNeed').hidden = false;
+    $('setupNeed').textContent = 'On your iPhone, open ' + LINK_ADDRESS + ' and enter this code:';
+    $('pairCode').textContent = TidalHandoff.showCode(code);
+    $('pairCode').hidden = false;
+    $('signInHere').hidden = false;
+    $('setupTitle').focus({ preventScroll: true });
+    pairingNote('Connecting…');
+    const fail = (text) => { if (pairing === mine) drawCard(text); };
+    let room;
+    try {
+      room = await TidalHandoff.meet(code, 'g', async (msg) => {
+        if (pairing !== mine || mine.done) return;
+        if (msg.t === 'hello') {
+          room.send(offer);
+          pairingNote('iPhone connected. Finish signing in to TIDAL there.');
+        } else if (msg.t === 'cancel') {
+          fail('Signing in was cancelled on the iPhone. Nothing changed.');
+        } else if (msg.t === 'code' && msg.st === offer.st) {
+          mine.done = true;
+          pairingNote('Signing you in…');
+          const result = await TidalAPI.redeemOffer(msg.code, msg.st);
+          // Said three times: the phone may be reconnecting while it waits to hear this.
+          for (const wait of [0, 1500, 4000]) setTimeout(() => { try { room.send({ t: result === 'ok' ? 'done' : 'failed' }); } catch (e) { /* closed */ } }, wait);
+          if (pairing !== mine) return;
+          if (result === 'ok' && TidalAPI.signedIn()) {
+            mine.room = null; // stays open a few seconds so the phone hears "done"
+            setTimeout(() => room.close(), 6000);
+            endPairing();
+            start();
+          } else fail('Signing in did not finish. Please try again.');
+        }
+      });
+    } catch (e) { fail('Signing in needs a connection. Please try again.'); return true; }
+    if (pairing !== mine) { room.close(); return true; }
+    mine.room = room;
+    // The phone may arrive before or after this page is connected: the offer is repeated until it is used.
+    mine.timers.push(setInterval(() => {
+      if (mine.done) return;
+      if (room.live() && $('setupHint').textContent === 'Connecting…') pairingNote('Waiting for your iPhone…');
+      room.send(offer);
+    }, 2500));
+    mine.timers.push(setTimeout(() => fail('That code ran out. Press Sign in for a new one.'), TidalHandoff.MAX_AGE));
+    return true;
+  }
+
   function start() {
+    endPairing();
     active = true;
     wire();
     wireListSwipes();
@@ -151,6 +232,7 @@ const TidalLibrary = (() => {
 
   // The Android player takes over, or the sign-in is gone. Music started here stops.
   function stop() {
+    endPairing();
     if (!active) return;
     active = false;
     clearRetry();
@@ -757,10 +839,19 @@ const TidalLibrary = (() => {
   function wireCard() {
     if (cardWired) return;
     cardWired = true;
+    // Sign in shows a code for the phone. Glasses cannot leave the app for TIDAL's page, and a
+    // password is not something to type on them; a phone or a computer can sign in on the spot.
     $('signIn').addEventListener('click', async () => {
+      const shown = await beginPairing().catch(() => false);
+      if (!shown) $('setupNeed').textContent = 'Signing in cannot start in this browser.';
+    });
+    $('signInHere').addEventListener('click', async () => {
+      endPairing();
       $('setupNeed').textContent = 'Opening TIDAL…';
       const left = await TidalAPI.beginLogin().catch(() => false);
-      if (!left) $('setupNeed').textContent = 'Signing in cannot start in this browser.';
+      if (!left) { $('setupNeed').textContent = 'Signing in cannot start in this browser.'; return; }
+      // Still here after a while: this browser did not go. Say so instead of waiting forever.
+      setTimeout(() => { if (!TidalAPI.signedIn() && $('setupNeed').textContent === 'Opening TIDAL…') drawCard('This browser did not open TIDAL. Sign in with the code instead.'); }, 8000);
     });
     $('signOut').addEventListener('click', signOut);
   }

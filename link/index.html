@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <meta name="referrer" content="no-referrer">
+  <meta name="theme-color" content="#000000">
+  <title>Sign in for your glasses · TIDAL Glass</title>
+  <link rel="icon" href="../icon.svg" type="image/svg+xml">
+  <style>
+    :root { color-scheme: dark; }
+    html, body { margin: 0; min-height: 100%; background: #000; color: #f3f6f4; font: 18px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+    main { box-sizing: border-box; max-width: 460px; margin: 0 auto; padding: 40px 22px 32px; display: flex; flex-direction: column; gap: 18px; }
+    h1 { margin: 0; font-size: 28px; line-height: 1.15; }
+    p { margin: 0; color: #c9d1cd; }
+    label { font-weight: 650; color: #f3f6f4; }
+    input { box-sizing: border-box; width: 100%; padding: 14px 16px; border-radius: 14px; border: 2px solid #56655d; background: #0b0d0c; color: #fff;
+      font: 700 34px/1.1 ui-monospace, "SF Mono", Menlo, Consolas, monospace; letter-spacing: 0.12em; text-transform: uppercase; text-align: center; }
+    input:focus { outline: 3px solid #33ffee; outline-offset: 2px; border-color: #33ffee; }
+    button { min-height: 56px; border-radius: 999px; border: 0; background: #33ffee; color: #001a17; font: 700 19px/1 inherit; padding: 0 24px; }
+    button[disabled] { opacity: 0.4; }
+    button:focus-visible { outline: 3px solid #fff; outline-offset: 3px; }
+    #status { min-height: 1.45em; color: #f3f6f4; font-weight: 600; }
+    #status.bad { color: #ffb4a8; }
+    .small { font-size: 15px; color: #8d9792; }
+    [hidden] { display: none !important; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1 id="title">Sign in for your glasses</h1>
+    <p id="lead">Your glasses show a code. Enter it here, then log in to TIDAL on this phone.</p>
+    <form id="form" autocomplete="off">
+      <label for="code">Code from the glasses</label>
+      <input id="code" name="code" inputmode="text" autocapitalize="characters" autocorrect="off" spellcheck="false" maxlength="11" placeholder="ABCD EFGH" aria-describedby="status">
+      <p style="margin-top:18px"><button id="go" type="submit">Continue to TIDAL</button></p>
+    </form>
+    <p id="status" role="status" aria-live="polite"></p>
+    <p class="small">Your TIDAL password is typed only on TIDAL's own page. This page passes a one-time answer to your glasses and keeps nothing. Not affiliated with TIDAL.</p>
+  </main>
+  <script>window.TIDAL_LINK_PAGE = true;</script>
+  <script src="../tidal-config.js"></script>
+  <script src="../tidal-handoff.js"></script>
+  <script>
+    'use strict';
+    (function () {
+      const $ = (id) => document.getElementById(id);
+      const APP = new URL('../', location.href).href; // the app's own folder: where TIDAL sends the answer
+      const say = (text, bad) => { $('status').textContent = text; $('status').classList.toggle('bad', !!bad); };
+      const formOff = () => { $('form').hidden = true; $('lead').hidden = true; };
+
+      // ---- coming back from TIDAL with the answer for the glasses -------------------------------------
+      const q = new URLSearchParams(location.search);
+      const kept = TidalHandoff.remembered();
+      if (q.has('code') || q.has('error')) {
+        const code = q.get('code');
+        const state = q.get('state');
+        const refused = q.has('error') || !code;
+        try { history.replaceState(null, '', location.pathname); } catch (e) { /* stays */ }
+        if (!kept || kept.state !== state) { say('This sign-in is too old. Press Sign in on the glasses for a new code.', true); return; }
+        formOff();
+        TidalHandoff.forget();
+        $('title').textContent = refused ? 'Nothing changed' : 'Almost there';
+        say(refused ? 'TIDAL login was cancelled.' : 'Passing the sign-in to your glasses…');
+        let finished = false;
+        TidalHandoff.meet(kept.code, 'p', (msg) => {
+          if (finished) return;
+          if (msg.t === 'done') { finished = true; $('title').textContent = 'Done'; say('Your glasses are signed in. You can close this page.'); }
+          else if (msg.t === 'failed') { finished = true; $('title').textContent = 'That did not work'; say('TIDAL did not accept the sign-in. Press Sign in on the glasses and try once more.', true); }
+        }, '../').then((room) => {
+          const body = refused ? { t: 'cancel' } : { t: 'code', code, st: state };
+          const again = setInterval(() => { if (finished || refused && tries > 3) { clearInterval(again); setTimeout(() => room.close(), 3000); return; } tries += 1; room.send(body); }, 1500);
+          let tries = 0;
+          room.send(body);
+          if (refused) return;
+          setTimeout(() => { if (!finished) { finished = true; clearInterval(again); room.close(); $('title').textContent = 'The glasses did not answer'; say('Keep TIDAL open on the glasses with the code showing, then start again here.', true); } }, 90000);
+        }, () => say('No connection. Check the internet on this phone and reload this page.', true));
+        return;
+      }
+
+      // ---- the code from the glasses -------------------------------------------------------------------
+      if (!TidalHandoff.clientId()) { formOff(); say('TIDAL sign-in is not set up for this app yet.', true); return; }
+      const input = $('code');
+      input.focus();
+      let room = null;
+      $('form').addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const code = TidalHandoff.cleanCode(input.value);
+        if (!code) { say('That is not a code from the glasses. It has 8 letters and digits.', true); input.focus(); return; }
+        $('go').disabled = true;
+        say('Looking for your glasses…');
+        if (room) room.close();
+        let left = false;
+        try {
+          room = await TidalHandoff.meet(code, 'p', (msg) => {
+            if (left || !TidalHandoff.validOffer(msg, APP)) return;
+            left = true;
+            clearInterval(hello); clearTimeout(giveUp);
+            if (!TidalHandoff.remember(code, msg.st)) { say('This browser will not keep the sign-in going. Turn off Private Browsing and try again.', true); $('go').disabled = false; return; }
+            say('Opening TIDAL…');
+            const url = TidalHandoff.authorizeUrl(msg);
+            room.close();
+            location.assign(url);
+          }, '../');
+        } catch (e) { say('No connection. Check the internet on this phone and try again.', true); $('go').disabled = false; return; }
+        room.send({ t: 'hello' });
+        const hello = setInterval(() => room.send({ t: 'hello' }), 1500);
+        const giveUp = setTimeout(() => {
+          if (left) return;
+          clearInterval(hello); room.close();
+          say('No glasses are showing that code. Check it, or press Sign in on the glasses for a new one.', true);
+          $('go').disabled = false; input.focus();
+        }, 25000);
+      });
+    })();
+  </script>
+</body>
+</html>

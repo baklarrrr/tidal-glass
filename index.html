@@ -185,15 +185,18 @@
       <h1 id="setupTitle" tabindex="-1">TIDAL on iPhone</h1>
       <p id="setupNeed" class="need" hidden></p>
       <button id="signIn" class="pill-btn signin" type="button" hidden>Sign in to TIDAL</button>
+      <p id="pairCode" class="paircode" aria-label="Sign-in code" hidden></p>
       <p id="setupOption" class="artist">Play a track in TIDAL on your iPhone. With the display asleep, tap the right temple to pause or resume.</p>
       <a id="openTidal" href="https://tidal.com/my-collection" referrerpolicy="no-referrer" hidden>Open my TIDAL library</a>
       <p id="audioRoute">Sound coming from your phone? In TIDAL’s Now Playing, tap the speaker → AirPlay &amp; Bluetooth → your glasses.</p>
       <p id="setupHint" class="album" role="status" hidden></p>
+      <button id="signInHere" class="android-option" type="button" hidden>Sign in on this device instead</button>
       <button id="signOut" class="android-option" type="button" hidden>Sign out of TIDAL</button>
       <button id="useAndroid" class="android-option" type="button" hidden>Control paired Android</button>
     </section>
   </main>
   <script src="tidal-config.js"></script>
+  <script src="tidal-handoff.js"></script>
   <script src="tidal-api.js"></script>
   <script src="tidal-library.js"></script>
   <script src="app.js"></script>
