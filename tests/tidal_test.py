@@ -279,7 +279,7 @@ def main():
                         wait_text(page, "#toggleLabel", "Preview 30 s")
                         assert page.locator("#toggleLabel").is_visible() and focused(page) == "toggle"
                         assert text(page, "#tplayNote") == "TIDAL lets other apps play previews only."
-                        assert text(page, "#tplayHint") == "Full songs play from the TIDAL app on your phone."
+                        assert text(page, "#tplayHint") == "A clip here pauses TIDAL on your phone. Whole songs play in the TIDAL app."
                         assert text(page, "#title") == "Time (You and I)" and text(page, "#artist") == "Khruangbin"
                         assert text(page, "#album") == "Mordechai · 2:30"
                         page.locator("#artwrap.has-art").wait_for()

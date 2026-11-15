@@ -645,7 +645,7 @@ const TidalLibrary = (() => {
     else if (cap.mode === 'preview') {
       state = on ? 'Playing a preview' : (loaded() && audio.ended ? 'Preview finished' : 'Preview ready');
       note = cap.why ? 'TIDAL gave a preview (' + String(cap.why).toLowerCase().replace(/_/g, ' ') + ').' : 'TIDAL lets other apps play previews only.';
-      hint = 'Full songs play from the TIDAL app on your phone.';
+      hint = 'A clip here pauses TIDAL on your phone. Whole songs play in the TIDAL app.';
     } else if (cap.mode === 'full') {
       state = on ? 'Playing' : (loaded() && audio.currentTime > 0 && !audio.ended ? 'Paused' : 'Ready to play');
     } else {
