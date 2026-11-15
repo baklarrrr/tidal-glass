@@ -63,6 +63,11 @@ def main():
                     page.keyboard.press("Enter")
                     page.locator("#items .thumb.has-art").first.wait_for()
                     shot(page, "05-my-tracks")
+                    page.keyboard.press("ArrowUp")
+                    page.wait_for_timeout(60)
+                    shot(page, "05b-open-in-tidal-focused")
+                    page.keyboard.press("ArrowDown")
+                    page.wait_for_timeout(60)
                     for _ in range(12):
                         page.keyboard.press("ArrowDown")
                         page.wait_for_timeout(40)

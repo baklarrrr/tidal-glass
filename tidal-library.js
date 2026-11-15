@@ -95,12 +95,12 @@ const TidalLibrary = (() => {
     if (finishing) return;
     if (TidalAPI.configured() && TidalAPI.hasLoginAnswer()) {
       finishing = true;
-      drawCard('Finishing sign-in…');
+      drawCard('Signing you in…', false, true);
       TidalAPI.finishLogin().then((result) => {
         finishing = false;
         if (result === 'ok' && TidalAPI.signedIn()) start();
-        else drawCard(result === 'denied' ? 'Sign-in was cancelled. Nothing changed.' : 'Sign-in did not finish. Please try again.');
-      }, () => { finishing = false; drawCard('Sign-in did not finish. Please try again.'); });
+        else drawCard(result === 'denied' ? 'Signing in was cancelled. Nothing changed.' : 'Signing in did not finish. Please try again.');
+      }, () => { finishing = false; drawCard('Signing in did not finish. Please try again.'); });
       return;
     }
     if (TidalAPI.signedIn()) {
@@ -113,19 +113,21 @@ const TidalLibrary = (() => {
   }
 
   // The first screen: no client ID yet, or signed out. Also Help, with `help` set.
-  function drawCard(message, help = false) {
+  // What happened (a cancelled sign-in, a sign-in TIDAL wants again) is said once, in the line under
+  // the title, in place of the usual one; `busy` hides the button while an answer is being exchanged.
+  function drawCard(message, help = false, busy = false) {
     document.body.classList.remove('tidal');
-    if (showCard) showCard(message || '');
+    if (showCard) showCard('');
     const configured = TidalAPI.configured();
     const signedIn = TidalAPI.signedIn();
     const need = $('setupNeed');
-    need.textContent = !configured ? 'TIDAL needs one sign-in to set up. Until then:'
-      : (signedIn ? '' : 'Sign in once to see your TIDAL library here.');
+    need.textContent = message || (!configured ? 'TIDAL needs one sign-in to set up. Until then:'
+      : (signedIn ? '' : 'Sign in once to see your TIDAL library here.'));
     need.hidden = !need.textContent;
-    $('signIn').hidden = !configured || signedIn;
+    $('signIn').hidden = !configured || signedIn || busy;
     $('signOut').hidden = !(help && signedIn);
+    // Help rests on the title: signing out takes a deliberate swipe to its button first.
     if (!$('signIn').hidden) $('signIn').focus({ preventScroll: true });
-    else if (help) (!$('signOut').hidden ? $('signOut') : $('setupTitle')).focus({ preventScroll: true });
   }
 
   function start() {
@@ -169,7 +171,7 @@ const TidalLibrary = (() => {
     if (!active) return;
     writeJson('session', RESUME_KEY, stack);
     stop();
-    drawCard('TIDAL asked for a new sign-in. Your place in the menu is kept.');
+    drawCard('Please sign in to TIDAL again. Your place in the menu is kept.');
   }
 
   function signOut() {
@@ -737,6 +739,17 @@ const TidalLibrary = (() => {
     document.addEventListener('keydown', (e) => {
       if (active && e.key === 'Escape' && stack.length > 1) { e.preventDefault(); back(); }
     });
+    // Help opens resting on its title. A swipe down that the platform did not turn into a move
+    // goes to the first button there.
+    $('setup').addEventListener('keydown', (e) => {
+      if (!active || top().s !== 'help' || e.key !== 'ArrowDown') return;
+      const from = document.activeElement;
+      setTimeout(() => {
+        if (document.activeElement !== from || (from !== $('setupTitle') && from !== document.body)) return;
+        const first = [$('signOut'), $('useAndroid')].find((b) => !b.hidden);
+        if (first) first.focus({ preventScroll: true });
+      }, 0);
+    });
   }
 
   // The first screen's own buttons exist before any sign-in, so they are wired at load.
@@ -745,10 +758,9 @@ const TidalLibrary = (() => {
     if (cardWired) return;
     cardWired = true;
     $('signIn').addEventListener('click', async () => {
-      $('setupHint').hidden = false;
-      $('setupHint').textContent = 'Opening TIDAL sign-in…';
+      $('setupNeed').textContent = 'Opening TIDAL…';
       const left = await TidalAPI.beginLogin().catch(() => false);
-      if (!left) $('setupHint').textContent = 'Sign-in cannot start in this browser.';
+      if (!left) $('setupNeed').textContent = 'Signing in cannot start in this browser.';
     });
     $('signOut').addEventListener('click', signOut);
   }

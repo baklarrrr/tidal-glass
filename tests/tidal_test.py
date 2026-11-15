@@ -341,7 +341,7 @@ def main():
                         mock.refresh_ok = False
                         page.locator("#more").click()
                         page.locator("#signIn").wait_for()
-                        assert "Your place in the menu is kept" in text(page, "#setupHint")
+                        assert "Your place in the menu is kept" in text(page, "#setupNeed")
                         assert page.evaluate("localStorage.getItem('tg.tidal.auth.v1')") is None
                         assert not page.locator("#list").is_visible() and focused(page) == "signIn"
                         mock.refresh_ok = True
@@ -432,8 +432,11 @@ def main():
                         key(page, "Escape")
                         open_menu(page, "help")
                         page.locator("#signOut").wait_for()
-                        assert focused(page) == "signOut" and "tap the right temple" in text(page, "#setupOption")
+                        assert focused(page) == "setupTitle", "Sign out must not be one accidental pinch away"
+                        assert "tap the right temple" in text(page, "#setupOption")
                         assert not page.locator("#signIn").is_visible() and not page.locator("#useAndroid").is_visible()
+                        key(page, "ArrowDown")
+                        assert focused(page) == "signOut"
                         key(page, "Escape")
                         wait_text(page, "#listTitle", "Library")
                         assert focused(page) == "menu:help"
@@ -441,7 +444,7 @@ def main():
                         page.locator("#signOut").click()
                         page.locator("#signIn").wait_for()
                         assert page.evaluate("localStorage.getItem('tg.tidal.auth.v1') === null && localStorage.getItem('tg.tidal.lists.v1') === null")
-                        assert "Signed out" in text(page, "#setupHint")
+                        assert "Signed out" in text(page, "#setupNeed")
                     check("Help keeps the temple-tap card one Back away; Sign out removes the tokens and the saved menu copy", help_and_sign_out)
 
                 # ---- answers that must be refused ---------------------------------------------------------------
@@ -451,10 +454,10 @@ def main():
 
                     def bad_answers():
                         page.goto(base + "?code=forged&state=forged")
-                        page.wait_for_function("document.getElementById('setupHint').textContent.startsWith('Sign-in did not finish')")
+                        page.wait_for_function("document.getElementById('setupNeed').textContent.startsWith('Signing in did not finish')")
                         assert page.url == base and not mock.token_posts and focused(page) == "signIn"
                         page.goto(base + "?error=access_denied&state=x")
-                        page.wait_for_function("document.getElementById('setupHint').textContent.startsWith('Sign-in was cancelled')")
+                        page.wait_for_function("document.getElementById('setupNeed').textContent.startsWith('Signing in was cancelled')")
                         assert page.url == base and not page.evaluate("TidalAPI.signedIn()")
                     check("a forged or cancelled sign-in answer: nothing exchanged, address cleaned, back on Sign in with one line", bad_answers)
 
