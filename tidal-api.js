@@ -222,24 +222,52 @@ const TidalAPI = (() => {
     return new TidalError('auth');
   }
 
+  // Renewing the sign-in. The sign-in is given up ONLY when TIDAL itself says the grant is over
+  // (the error names in its sign-in rules). A dropped connection, a slow answer, a 5xx or an answer
+  // that makes no sense keeps the sign-in and is tried again: up to five more times here, and then
+  // again on the next request, for as long as it takes.
+  const GRANT_OVER = { 400: ['invalid_grant', 'unauthorized_client', 'invalid_request'], 401: ['invalid_client', 'access_denied'] };
+  const REFRESH_TRIES = 5;
+
   function refresh() {
     if (refreshing) return refreshing;
     refreshing = (async () => {
-      const t = tokens();
-      if (!t || !t.r) throw loseAuth();
-      let res;
-      try {
-        res = await timedFetch(TOKEN, {
-          method: 'POST',
-          headers: { 'content-type': 'application/x-www-form-urlencoded' },
-          body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: t.r, client_id: clientId() }).toString(),
-        });
-      } catch (e) { throw new TidalError('offline'); } // the sign-in is kept: only the network failed
-      if (res.status === 400 || res.status === 401 || res.status === 403) throw loseAuth();
-      if (!res.ok) throw new TidalError(res.status === 429 ? 'busy' : 'server');
-      let body = null;
-      try { body = await res.json(); } catch (e) { /* handled below */ }
-      if (!saveTokens(body, t)) throw new TidalError('server');
+      let lastKind = 'offline';
+      for (let attempt = 0; attempt <= REFRESH_TRIES; attempt++) {
+        if (attempt) await sleep(Math.min(500 * 2 ** (attempt - 1), 8000));
+        const t = tokens();
+        if (!t || !t.r) throw loseAuth();
+        let res;
+        try {
+          res = await timedFetch(TOKEN, {
+            method: 'POST',
+            headers: { 'content-type': 'application/x-www-form-urlencoded' },
+            body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: t.r, client_id: clientId() }).toString(),
+          });
+        } catch (e) {
+          lastKind = 'offline';
+          if (navigator.onLine === false) break; // no network at all: waiting here helps nobody
+          continue;
+        }
+        let body = null;
+        try { body = await res.json(); } catch (e) { /* judged below */ }
+        if (res.ok) {
+          if (saveTokens(body, t)) return;
+          lastKind = 'server';
+          continue;
+        }
+        const named = body && typeof body.error === 'string' ? body.error : '';
+        if ((GRANT_OVER[res.status] || []).includes(named)) {
+          // Another open page of this app may have renewed first and been given a new refresh token.
+          auth = null;
+          const now = tokens();
+          if (now && now.r && now.r !== t.r) { if (now.exp - Date.now() > 60000) return; continue; }
+          auth = t;
+          throw loseAuth();
+        }
+        lastKind = res.status === 429 ? 'busy' : 'server';
+      }
+      throw new TidalError(lastKind); // the sign-in is kept
     })().finally(() => { refreshing = null; });
     return refreshing;
   }
@@ -306,7 +334,8 @@ const TidalAPI = (() => {
         continue;
       }
       if (res.status === 401) {
-        if (renewed) throw loseAuth();
+        // Renewed a moment ago and still refused: that is about this one request, not the sign-in.
+        if (renewed) throw new TidalError('missing', { status: 401 });
         renewed = true;
         await refresh();
         continue;
