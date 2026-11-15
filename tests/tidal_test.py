@@ -82,15 +82,15 @@ def main():
 
         try:
             with server(ROOT) as base:
-                # ---- no client ID: the app as committed -------------------------------------------
+                # ---- no client ID: the app with an empty tidal-config.js --------------------------
                 with new_context() as ctx:
+                    ctx.route("**/tidal-config.js", lambda r: r.fulfill(content_type="text/javascript", body="window.TIDAL_CLIENT_ID = '';"))
                     page = ctx.new_page()
                     asked = []
                     page.on("request", lambda r: asked.append(r.url))
                     page.goto(base)
 
                     def no_client_id():
-                        assert "window.TIDAL_CLIENT_ID = '';" in (ROOT / "tidal-config.js").read_text()
                         assert text(page, "#setupTitle") == "TIDAL on iPhone"
                         assert text(page, "#setupNeed").startswith("TIDAL needs one sign-in to set up")
                         assert "tap the right temple" in text(page, "#setupOption")
@@ -550,11 +550,11 @@ def main():
                         sign_in(page, base)
                         open_menu(page, "tracks")
                         wait_rows(page, 20)
-                        cached = page.evaluate("caches.open('tidal-glass-v25').then(c => c.keys()).then(ks => ks.map(k => k.url))")
+                        cached = page.evaluate("caches.open('tidal-glass-v26').then(c => c.keys()).then(ks => ks.map(k => k.url))")
                         for name in ("tidal-api.js", "tidal-library.js", "tidal-config.js", "app.js", "style.css"):
                             assert any(u.endswith("/" + name) for u in cached), name
                         assert not [u for u in cached if "code=" in u or "state=" in u], "a sign-in answer was kept in the cache"
-                        assert page.evaluate("caches.keys()") == ["tidal-glass-v25"]
+                        assert page.evaluate("caches.keys()") == ["tidal-glass-v26"]
                         ctx.set_offline(True)
                         mock.offline = True
                         page.reload(wait_until="domcontentloaded")
@@ -562,7 +562,7 @@ def main():
                         key(page, "Enter")
                         wait_rows(page, 20)
                         page.wait_for_function("document.getElementById('listNote').textContent.startsWith('Saved list from')", timeout=15000)
-                    check("with the service worker (cache v25, new files in its shell): the app and its saved menu open with no network at all", offline_shell)
+                    check("with the service worker (cache v26, new files in its shell): the app and its saved menu open with no network at all", offline_shell)
                     ctx.close()
 
             check("no page errors in any of the above", lambda: (_ for _ in ()).throw(AssertionError(errors[:3])) if errors else None)
